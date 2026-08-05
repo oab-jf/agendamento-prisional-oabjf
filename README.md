@@ -16,7 +16,8 @@ Esta documentação foi montada a partir do snapshot completo **v26** do fronten
 8. [`docs/07-design-system-e-ux.md`](docs/07-design-system-e-ux.md)
 9. [`docs/08-changelog-tecnico.md`](docs/08-changelog-tecnico.md)
 10. [`docs/09-envios-diarios.md`](docs/09-envios-diarios.md)
-11. [`docs/99-alertas-criticos.md`](docs/99-alertas-criticos.md)
+11. [`docs/10-bloqueios-cancelamentos.md`](docs/10-bloqueios-cancelamentos.md)
+12. [`docs/99-alertas-criticos.md`](docs/99-alertas-criticos.md)
 
 ## Regra de ouro
 

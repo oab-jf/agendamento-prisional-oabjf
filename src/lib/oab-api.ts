@@ -1449,6 +1449,13 @@ export type AdminBloqueio = {
   statusLabel?: string;
   criadoEm?: string;
   atualizadoEm?: string;
+  motivoPublico?: string;
+  cancelarAgendamentosExistentes?: boolean;
+  totalAgendamentosAfetados?: number;
+  totalAgendamentosCancelados?: number;
+  totalEmailsCancelamentoEnviados?: number;
+  totalEmailsCancelamentoComErro?: number;
+  cancelamentoAgendamentosExecutadoEm?: string | null;
 };
 
 export type AdminBloqueiosFiltros = {
@@ -1497,11 +1504,77 @@ export type CriarAdminBloqueioPayload = {
   motivo: string;
   observacoesInternas?: string;
   ativo?: boolean;
+  cancelarAgendamentosExistentes?: boolean;
+};
+
+export type AdminBloqueioImpactoItem = {
+  _id: string;
+  protocolo: string;
+  unidadeSlug?: string;
+  unidadeNome?: string;
+  dataIso: string;
+  dataLabel?: string;
+  horarioInicio?: string;
+  horarioFim?: string;
+  horarioLabel?: string;
+  nomeAdvogado?: string;
+  numeroOab?: string;
+  emailAdvogado?: string;
+  nomeIpl?: string;
+  infopen?: string;
+  listaDiariaEnviada?: boolean;
+};
+
+export type AdminBloqueioImpactoResposta =
+  | {
+      ok: true;
+      totalAfetados: number;
+      totalComListaJaEnviada?: number;
+      podeCancelar: boolean;
+      agendamentos: AdminBloqueioImpactoItem[];
+      truncado?: boolean;
+    }
+  | { ok: false; code?: string; message?: string; error?: string };
+
+export type AdminBloqueioCancelamentoResumo = {
+  solicitado: boolean;
+  totalAfetados: number;
+  totalCancelados: number;
+  totalEmailsEnviados: number;
+  totalEmailsComErro: number;
+  listaAtualizadaRecomendada?: boolean;
+  datasComListaJaEnviada?: Array<{ unidadeSlug: string; dataIso: string }>;
 };
 
 export type AdminBloqueioResposta =
-  | { ok: true; mensagem?: string; bloqueio?: AdminBloqueio }
+  | {
+      ok: true;
+      mensagem?: string;
+      bloqueio?: AdminBloqueio;
+      impacto?: { totalAfetados: number };
+      cancelamento?: AdminBloqueioCancelamentoResumo;
+    }
   | { ok: false; code?: string; message?: string; error?: string };
+
+export async function analisarImpactoAdminBloqueio(
+  token: string,
+  payload: CriarAdminBloqueioPayload,
+): Promise<AdminBloqueioImpactoResposta> {
+  const res = await fetch(`${API_BASE}/oabAdminBloqueioImpacto`, {
+    method: "POST",
+    headers: adminHeaders(token, true),
+    body: JSON.stringify(payload),
+  });
+  if (res.status === 401 || res.status === 403) throw new Error("SESSAO_EXPIRADA");
+  const raw = await parseAdminJson(res);
+  if (!raw) return { ok: false, error: `HTTP ${res.status}`, message: `HTTP ${res.status}` };
+  if ((raw as { ok?: boolean }).ok === true) {
+    return raw as unknown as AdminBloqueioImpactoResposta;
+  }
+  const code = getApiCode(raw as AnyErr);
+  if (isSessionExpiredCode(code)) throw new Error("SESSAO_EXPIRADA");
+  return normalizeApiError(raw as AnyErr, `HTTP ${res.status}`);
+}
 
 export async function criarAdminBloqueio(
   token: string,

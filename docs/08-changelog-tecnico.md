@@ -1,5 +1,14 @@
 # 08 — Changelog técnico resumido
 
+## v27 — Bloqueios com cancelamento
+
+- Análise prévia dos agendamentos afetados ao criar bloqueio.
+- Escolha explícita entre manter ou cancelar agendamentos existentes.
+- Campo `Motivo público`, enviado por e-mail aos advogados cancelados.
+- Notificação de cancelamento via Infobip.
+- Auditoria de cancelamentos e falhas de e-mail no CMS.
+- Alerta para reenvio da lista diária quando ela já tiver sido enviada.
+
 ## v26
 
 - Fluxo de convites administrativos.
@@ -25,7 +34,6 @@
 
 ## Próximas frentes prováveis
 
-- Envio diário das listas de atendimentos para as unidades.
-- Tela/aba de configuração de envios.
+- Homologação real dos envios diários e cancelamentos por bloqueio.
 - Logs administrativos mais visíveis.
 - Migração gradual de usuário legacy para permissões explícitas.

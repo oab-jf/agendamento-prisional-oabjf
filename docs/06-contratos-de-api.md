@@ -60,6 +60,7 @@ POST /oabAdminUnidadeStatus
 
 ```text
 GET  /oabAdminBloqueios
+POST /oabAdminBloqueioImpacto
 POST /oabAdminBloqueios
 POST /oabAdminBloqueioAtualizar
 POST /oabAdminBloqueioRemover
