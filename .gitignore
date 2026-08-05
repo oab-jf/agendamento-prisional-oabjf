@@ -1,0 +1,10 @@
+node_modules/
+dist/
+dist-pages/
+.output/
+.vinxi/
+.env
+.env.*
+!.env.example
+.DS_Store
+*.log

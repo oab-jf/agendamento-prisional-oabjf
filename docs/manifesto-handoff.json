@@ -1,0 +1,45 @@
+{
+  "baseado_em": "oab-central-codigo-completo-v26-full.md",
+  "frontend_publicado": "Cloudflare Pages / dist-pages",
+  "api_base": "https://www.juizdefora-oabmg.org.br/_functions",
+  "rotas_pages_principais": [
+    "/",
+    "/admin",
+    "/admin/convite",
+    "/consultar",
+    "/agendar/unidade",
+    "/documento/unidade"
+  ],
+  "colecoes": {
+    "BloqueiosAgenda": "Import4256",
+    "UnidadesPrisionais": "Import4258",
+    "AgendamentosPrisionais": "Import4259",
+    "SolicitacoesDocumentos": "Import4260",
+    "AdminLogs": "Import4261",
+    "AdminSessoes": "Import4262",
+    "AdminUsuarios": "Import4263"
+  },
+  "permissoes": [
+    "agendamentos.ver",
+    "agendamentos.cancelar",
+    "agendamentos.remarcar",
+    "documentos.ver",
+    "documentos.abrir",
+    "documentos.concluir",
+    "unidades.ver",
+    "unidades.criar",
+    "unidades.editar",
+    "unidades.ativar",
+    "bloqueios.ver",
+    "bloqueios.criar",
+    "bloqueios.editar",
+    "bloqueios.remover",
+    "usuarios.ver",
+    "usuarios.criar",
+    "usuarios.editar",
+    "usuarios.desativar",
+    "config.ver",
+    "config.testar_envios",
+    "config.ativar_envios"
+  ]
+}
