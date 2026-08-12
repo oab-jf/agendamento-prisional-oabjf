@@ -20,39 +20,64 @@ O commit `2bfe08c` preserva essa captura inicial no histórico Git.
 
 ## Atualização operacional — e-mail do advogado nas listas
 
-Em 12/08/2026, a OAB/JF informou que a lista diária enviada às unidades
-prisionais precisa trazer o e-mail do advogado para que a unidade possa enviar
-o link de acesso ao atendimento.
+Em 12/08/2026, a lista diária foi atualizada para incluir o e-mail do advogado
+destinado ao envio do link pela unidade prisional.
 
-A atualização foi aplicada em duas etapas:
-
-1. v0.1 — inclusão do e-mail na versão HTML e texto da lista, alerta para
-   registros sem e-mail válido e inclusão do e-mail no hash de conteúdo.
-   SHA-256: `7d73c2f16a15f65d7a831e6e862496acef60ed1b29548cad22e8e807a6ba0fe1`
-2. v0.2 — reenvio retroativo com contexto explícito, usando o motivo controlado
-   `incluir_emails_advogados`.
-   SHA-256: `7e641d56bf7991c44c37ed9be9d5febb967b475b5bd10ddb171f942f5f3f1182`
-
-O assunto contextual da v0.2 é:
-
-`Lista atualizada com e-mails para envio dos links — [Unidade] — [Data]`
-
-O corpo informa que a mensagem substitui a lista anterior e que o reenvio ocorre
-para incluir os e-mails necessários ao envio dos links de acesso.
-
-## Homologação operacional
-
-- envio de teste confirmado com o e-mail do advogado;
-- reenvio retroativo do Anexo Feminino Eliane Betti concluído em 12/08/2026;
-- 2 agendamentos atuais, 2 com e-mail válido e 0 sem e-mail;
-- Penitenciária José Edson Cavalieri não foi reenviada porque não havia
-  agendamentos atuais.
-
-## Estado live versionado após o hotfix
-
-Todos os arquivos permanecem iguais à captura-base, exceto:
+Estado live homologado:
 
 - `enviosListas.js` — `7e641d56bf7991c44c37ed9be9d5febb967b475b5bd10ddb171f942f5f3f1182`
 
-A pasta `wix-backend/source/` deve acompanhar o estado live auditado. O histórico
-Git preserva os snapshots anteriores.
+## Plataforma multimodal — Fase 1D
+
+### Camada 1 — módulos inertes
+
+Foram publicados no Backend do Wix, sem import por endpoints existentes:
+
+- `agendamentosCore.js` — `6e20b984bcf0902c30cdfc029c4f789a5f06cbcfb6c47407446875487f32adf6`
+- `agendamentosRepository.js` — `196014ba05213f8690d17bc3f9a4ed0357796d62caca0ee8a38accbacbbe0a52`
+- `agendamentosRepositoryWix.js` — `c336ad6ee49869984899b922c156ef7d74cf04d40548572f1a68b19e02fa7629`
+- `agendamentosShadowRead.js` — `c705d34da78693e4d2b13e8de0925feec0a6c412b041af092e1f81e898c363ec`
+- `agendamentosShadowReadWix.js` — `fa288aa25802a899cc7af3e54bab34fdba28796543c1ffae831f5711c2268a51`
+
+A publicação foi concluída sem erro.
+
+### Camada 2 — integração administrativa com flag OFF
+
+Foi adicionado:
+
+- `agendamentosAdminShadowBridge.js` — `c371ae3de951eab4e2876db49d1057be0136051e59a92a0f2c12071cd8a148c7`
+
+E `adminApi.js` passou ao estado:
+
+- `adminApi.js` — `0a96333d2b80c0c9520569c62451a775e0708ca72bf1dcd74e44800e62dc30e4`
+
+A integração mantém:
+
+`AGENDAMENTOS_SHADOW_READ_ENABLED = false`
+
+Portanto:
+
+- a resposta oficial da listagem administrativa continua sendo a implementação
+  legada;
+- o repositório candidato não executa query quando a flag está desligada;
+- nenhum endpoint HTTP foi alterado;
+- nenhuma coleção ou índice foi alterado;
+- nenhuma gravação schema v2 foi ativada.
+
+### Smoke test live
+
+Após publicação:
+
+- login administrativo: confirmado;
+- listagem de agendamentos: `total=15`, `itens=15`;
+- contrato administrativo vigente: preservado;
+- shadow read: `OFF`.
+
+## Estado live versionado
+
+A pasta `wix-backend/source/` deve acompanhar o estado efetivamente publicado no
+Wix. `adminApi.js` e `agendamentosAdminShadowBridge.js` são recapturados do live
+antes do checkpoint desta fase; os cinco módulos da Camada 1 são versionados a
+partir do payload exato que foi publicado.
+
+O histórico Git preserva os estados anteriores.

@@ -15,6 +15,10 @@ import {
   reenviarListaCore,
 } from 'backend/enviosListas';
 
+import {
+  observeAdminAppointmentsShadowRead,
+} from 'backend/agendamentosAdminShadowBridge';
+
 const COL = {
   UNIDADES: 'Import4258',
   AGENDAMENTOS: 'Import4259',
@@ -42,6 +46,7 @@ const ADMIN_INVITE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const INFOBIP_EMAIL_ENDPOINT = '/email/3/send';
 const CENTRAL_PUBLIC_URL = 'https://central.juizdefora-oabmg.org.br';
 const LEGACY_ADMIN_ID = 'legacy-secret-admin';
+const AGENDAMENTOS_SHADOW_READ_ENABLED = false;
 
 const ADMIN_PERMISSIONS = {
   AGENDAMENTOS_VER: 'agendamentos.ver',
@@ -243,6 +248,14 @@ export async function listarAgendamentosAdminApi(filtros = {}, tokenRecebido = '
     }
 
     const result = await query.find({ suppressAuth: true });
+
+    await observeAdminAppointmentsShadowRead({
+      wixData,
+      rawResult: result,
+      filtros,
+      enabled: AGENDAMENTOS_SHADOW_READ_ENABLED,
+      logger: (report) => console.info('agendamentos.shadow-read', report),
+    });
 
     let agendamentos = (result.items || []).map(mapAgendamentoAdmin);
 
