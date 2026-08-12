@@ -336,7 +336,7 @@ export function adaptLegacyPrisonAppointment(record = {}) {
     requester: {
       name: text(record.nomeAdvogado),
       oabNumber: text(record.numeroOab),
-      email: text(record.emailAdvogado).toLowerCase(),
+      email: text(record.emailAdvogado || record.emailIndex).toLowerCase(),
       phone: text(record.telefoneAdvogado),
     },
 
