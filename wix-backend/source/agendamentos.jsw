@@ -1,0 +1,288 @@
+import wixData from 'wix-data';
+import { validarDisponibilidadeFinal } from 'backend/disponibilidade';
+
+const COL = {
+  AGENDAMENTOS: 'Import4259',
+};
+
+export async function confirmarAgendamento(payload = {}) {
+  try {
+    const dados = normalizarPayload(payload);
+    const validacaoCampos = validarCamposObrigatorios(dados);
+
+    if (!validacaoCampos.ok) {
+      return validacaoCampos;
+    }
+
+    const validacaoAgenda = await validarDisponibilidadeFinal({
+      unidadeSlug: dados.unidadeSlug,
+      unidadeNome: dados.unidadeNome,
+      dataIso: dados.dataIso,
+      dataIsoInput: dados.dataIso,
+      dataAtendimentoIso: dados.dataIso,
+      horarioInicio: dados.horarioInicio,
+      slotKey: dados.slotKey,
+    });
+
+    if (!validacaoPermiteAgendamento(validacaoAgenda)) {
+      return {
+        ok: false,
+        codigo: 'HORARIO_INDISPONIVEL',
+        mensagem:
+          mensagemValidacao(validacaoAgenda) ||
+          'Esse horário não está mais disponível. Volte e escolha uma nova data ou horário.',
+      };
+    }
+
+    const ocupado = await slotJaOcupado(dados.slotKey);
+
+    if (ocupado) {
+      return {
+        ok: false,
+        codigo: 'HORARIO_INDISPONIVEL',
+        mensagem:
+          'Esse horário acabou de ser ocupado por outro agendamento. Volte e escolha outro horário.',
+      };
+    }
+
+    const agora = new Date();
+    const protocolo = gerarProtocolo(agora);
+    const tokenGestao = gerarTokenGestao();
+
+    const item = montarItemAgendamento(dados, protocolo, tokenGestao, agora);
+
+    const salvo = await wixData.insert(COL.AGENDAMENTOS, item, {
+      suppressAuth: true,
+    });
+
+    return {
+      ok: true,
+      protocolo,
+      agendamentoId: salvo._id,
+      mensagem: 'Agendamento confirmado com sucesso.',
+    };
+  } catch (err) {
+    console.error('Erro ao confirmar agendamento:', err);
+
+    return {
+      ok: false,
+      codigo: 'ERRO_INTERNO',
+      mensagem:
+        'Não foi possível confirmar o agendamento agora. Tente novamente em instantes.',
+    };
+  }
+}
+
+function normalizarPayload(payload = {}) {
+  const unidadeSlug = text(payload.unidadeSlug);
+  const unidadeNome = text(payload.unidadeNome);
+  const dataIso = text(payload.dataIso || payload.dataAtendimentoIso);
+  const dataLabel = text(payload.dataLabel);
+  const horarioInicio = text(payload.horarioInicio);
+  const horarioFim = calcularHorarioFim(horarioInicio, 30);
+  const slotKey = `${unidadeSlug}__${dataIso}__${horarioInicio}`;
+
+  const oabUf = lettersOnly(payload.oabUf).toUpperCase().slice(0, 2);
+  const oabNumero = digitsOnly(payload.oabNumero);
+  const numeroOabInformado = text(payload.numeroOab);
+  const numeroOab = numeroOabInformado || (oabUf && oabNumero ? `${oabUf}-${oabNumero}` : '');
+
+  const emailAdvogado = normalizeEmail(payload.advEmail || payload.emailAdvogado);
+
+  return {
+    unidadeSlug,
+    unidadeNome,
+    dataIso,
+    dataLabel,
+    horarioInicio,
+    horarioFim,
+    slotKey,
+
+    nomeAdvogado: text(payload.advNome || payload.nomeAdvogado).replace(/\s+/g, ' '),
+    oabUf,
+    oabNumero,
+    numeroOab,
+    emailAdvogado,
+    emailIndex: emailAdvogado,
+    telefoneAdvogado: digitsOnly(payload.advTelefone || payload.telefoneAdvogado).slice(0, 11),
+
+    nomeIpl: text(payload.nomeIpl).replace(/\s+/g, ' '),
+    infopen: digitsOnly(payload.infopen).slice(0, 10),
+
+    cienciaRegras: payload.cienciaRegras === true,
+  };
+}
+
+function validarCamposObrigatorios(dados) {
+  const erros = [];
+
+  if (!dados.unidadeSlug) erros.push('Unidade prisional não informada.');
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(dados.dataIso)) erros.push('Data de atendimento inválida.');
+  if (!/^\d{2}:\d{2}$/.test(dados.horarioInicio)) erros.push('Horário de atendimento inválido.');
+
+  if (!dados.nomeAdvogado || dados.nomeAdvogado.length < 3 || !dados.nomeAdvogado.includes(' ')) {
+    erros.push('Nome completo do advogado inválido.');
+  }
+
+  if (!/^[A-Z]{2}-\d{4,}$/.test(dados.numeroOab)) {
+    erros.push('OAB inválida.');
+  }
+
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(dados.emailAdvogado)) {
+    erros.push('E-mail do advogado inválido.');
+  }
+
+  if (![10, 11].includes(dados.telefoneAdvogado.length)) {
+    erros.push('Telefone do advogado inválido.');
+  }
+
+  if (!dados.nomeIpl || dados.nomeIpl.length < 3) {
+    erros.push('Nome da IPL inválido.');
+  }
+
+  if (dados.infopen && dados.infopen.length < 5) {
+    erros.push('INFOPEN inválido.');
+  }
+
+  if (!dados.cienciaRegras) {
+    erros.push('Ciência das regras não confirmada.');
+  }
+
+  if (erros.length) {
+    return {
+      ok: false,
+      codigo: 'DADOS_INVALIDOS',
+      mensagem: erros.join('\n'),
+    };
+  }
+
+  return { ok: true };
+}
+
+function validacaoPermiteAgendamento(validacao) {
+  if (validacao === true) return true;
+  if (!validacao) return false;
+  if (validacao.ok === false) return false;
+  if (validacao.disponivel === false) return false;
+  if (validacao.isDisponivel === false) return false;
+  return true;
+}
+
+function mensagemValidacao(validacao) {
+  if (!validacao || typeof validacao !== 'object') return '';
+  return text(validacao.mensagem || validacao.message || validacao.erro);
+}
+
+async function slotJaOcupado(slotKey) {
+  const result = await wixData
+    .query(COL.AGENDAMENTOS)
+    .eq('slotKey', slotKey)
+    .eq('status', 'agendado')
+    .limit(1)
+    .find({ suppressAuth: true });
+
+  return result.items.length > 0;
+}
+
+function montarItemAgendamento(dados, protocolo, tokenGestao, agora) {
+  const agoraIso = agora.toISOString();
+
+  return {
+    title: `${dados.unidadeNome} - ${dados.dataLabel || dados.dataIso} às ${dados.horarioInicio}`,
+    protocolo,
+
+    unidadeSlug: dados.unidadeSlug,
+    unidadeNome: dados.unidadeNome,
+    dataAtendimento: dados.dataIso,
+    dataAtendimentoIso: dados.dataIso,
+    dataLabel: dados.dataLabel,
+    horarioInicio: dados.horarioInicio,
+    horarioFim: dados.horarioFim,
+    slotKey: dados.slotKey,
+
+    nomeAdvogado: dados.nomeAdvogado,
+    numeroOab: dados.numeroOab,
+    emailAdvogado: dados.emailAdvogado,
+    emailIndex: dados.emailIndex,
+    telefoneAdvogado: dados.telefoneAdvogado,
+
+    nomeIpl: dados.nomeIpl,
+    infopen: dados.infopen,
+    cienciaRegras: true,
+
+    status: 'agendado',
+    tokenGestao,
+    tokenGestaoAtivo: true,
+
+    canceladoEm: '',
+    canceladoPor: '',
+    motivoCancelamento: '',
+    reagendadoDeProtocolo: '',
+    reagendadoParaProtocolo: '',
+
+    listaDiariaEnviada: false,
+    listaDiariaEnviadaEm: '',
+
+    criadoEm: agoraIso,
+    atualizadoEm: agoraIso,
+    observacoes: '',
+  };
+}
+
+function calcularHorarioFim(horarioInicio, duracaoMinutos) {
+  if (!/^\d{2}:\d{2}$/.test(horarioInicio)) return '';
+
+  const [h, m] = horarioInicio.split(':').map(Number);
+  const total = h * 60 + m + duracaoMinutos;
+  const hh = Math.floor(total / 60);
+  const mm = total % 60;
+
+  return `${pad2(hh)}:${pad2(mm)}`;
+}
+
+function gerarProtocolo(date) {
+  const yyyy = date.getFullYear();
+  const mm = pad2(date.getMonth() + 1);
+  const dd = pad2(date.getDate());
+  const hh = pad2(date.getHours());
+  const mi = pad2(date.getMinutes());
+  const ss = pad2(date.getSeconds());
+  const rand = randomToken(4);
+
+  return `AG-${yyyy}${mm}${dd}-${hh}${mi}${ss}-${rand}`;
+}
+
+function gerarTokenGestao() {
+  return `${Date.now().toString(36)}${randomToken(24)}`.toLowerCase();
+}
+
+function randomToken(length) {
+  let out = '';
+  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+
+  for (let i = 0; i < length; i += 1) {
+    out += chars[Math.floor(Math.random() * chars.length)];
+  }
+
+  return out;
+}
+
+function pad2(n) {
+  return String(n).padStart(2, '0');
+}
+
+function text(v) {
+  return v === null || v === undefined ? '' : String(v).trim();
+}
+
+function digitsOnly(v) {
+  return v === null || v === undefined ? '' : String(v).replace(/\D/g, '');
+}
+
+function lettersOnly(v) {
+  return v === null || v === undefined ? '' : String(v).replace(/[^a-zA-Z]/g, '');
+}
+
+function normalizeEmail(v) {
+  return text(v).toLowerCase();
+}

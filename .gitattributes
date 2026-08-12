@@ -1,0 +1,2 @@
+# Snapshots auditáveis do Wix/Velo: preservar bytes, espaços e final de arquivo.
+wix-backend/source/** -text -whitespace

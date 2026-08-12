@@ -1,0 +1,299 @@
+import wixData from 'wix-data';
+
+const COL = {
+  AGENDAMENTOS: 'Import4259',
+  UNIDADES: 'Import4258',
+};
+
+const MAX_RESULTS = 200;
+
+export async function listarUnidadesFiltroAdmin() {
+  try {
+    const result = await wixData
+      .query(COL.UNIDADES)
+      .limit(100)
+      .find({ suppressAuth: true });
+
+    const unidades = (result.items || [])
+      .map((item) => ({
+        _id: item._id,
+        slug: text(item.slug),
+        nome: text(item.nome || item.title),
+      }))
+      .filter((item) => item.slug && item.nome)
+      .sort((a, b) => a.nome.localeCompare(b.nome, 'pt-BR'));
+
+    return {
+      ok: true,
+      unidades,
+    };
+  } catch (err) {
+    console.error('Erro ao listar unidades para filtro admin:', err);
+
+    return {
+      ok: false,
+      unidades: [],
+      mensagem: 'Não foi possível carregar as unidades.',
+    };
+  }
+}
+
+export async function listarAgendamentosAdmin(filtros = {}) {
+  try {
+    const unidadeSlug = text(filtros.unidadeSlug);
+    const status = text(filtros.status);
+    const dataIso = normalizeDateIso(filtros.dataIso);
+    const busca = normalizeSearch(filtros.busca);
+
+    let query = wixData
+      .query(COL.AGENDAMENTOS)
+      .descending('criadoEm')
+      .limit(MAX_RESULTS);
+
+    if (unidadeSlug && unidadeSlug !== 'todos') {
+      query = query.eq('unidadeSlug', unidadeSlug);
+    }
+
+    if (status && status !== 'todos') {
+      query = query.eq('status', status);
+    }
+
+    if (dataIso) {
+      query = query.eq('dataAtendimentoIso', dataIso);
+    }
+
+    const result = await query.find({ suppressAuth: true });
+
+    let agendamentos = (result.items || []).map(mapAgendamento);
+
+    if (busca) {
+      agendamentos = agendamentos.filter((item) => matchesBusca(item, busca));
+    }
+
+    return {
+      ok: true,
+      total: agendamentos.length,
+      agendamentos,
+    };
+  } catch (err) {
+    console.error('Erro ao listar agendamentos admin:', err);
+
+    return {
+      ok: false,
+      total: 0,
+      agendamentos: [],
+      mensagem: 'Não foi possível carregar os agendamentos.',
+    };
+  }
+}
+
+export async function cancelarAgendamentoAdmin(payload = {}) {
+  try {
+    const agendamentoId = text(payload.agendamentoId || payload._id || payload.id);
+
+    if (!agendamentoId) {
+      return {
+        ok: false,
+        codigo: 'ID_OBRIGATORIO',
+        mensagem: 'Agendamento não identificado.',
+      };
+    }
+
+    const item = await wixData.get(COL.AGENDAMENTOS, agendamentoId, {
+      suppressAuth: true,
+    });
+
+    if (!item || !item._id) {
+      return {
+        ok: false,
+        codigo: 'NAO_ENCONTRADO',
+        mensagem: 'Agendamento não encontrado.',
+      };
+    }
+
+    const statusAtual = text(item.status || 'agendado').toLowerCase();
+
+    if (statusAtual === 'cancelado') {
+      return {
+        ok: true,
+        agendamentoId: item._id,
+        protocolo: text(item.protocolo),
+        status: 'cancelado',
+        mensagem: 'Este agendamento já estava cancelado.',
+      };
+    }
+
+    if (statusAtual === 'realizado') {
+      return {
+        ok: false,
+        codigo: 'STATUS_INVALIDO',
+        mensagem: 'Não é possível cancelar um agendamento já marcado como realizado.',
+      };
+    }
+
+    const agora = new Date();
+
+    const atualizado = {
+      ...item,
+      status: 'cancelado',
+      canceladoEm: agora,
+      atualizadoEm: agora,
+    };
+
+    const salvo = await wixData.update(COL.AGENDAMENTOS, atualizado, {
+      suppressAuth: true,
+    });
+
+    return {
+      ok: true,
+      agendamentoId: salvo._id,
+      protocolo: text(salvo.protocolo),
+      status: 'cancelado',
+      mensagem: 'Agendamento cancelado com sucesso.',
+    };
+  } catch (err) {
+    console.error('Erro ao cancelar agendamento admin:', err);
+
+    return {
+      ok: false,
+      codigo: 'ERRO_INTERNO',
+      mensagem: 'Não foi possível cancelar o agendamento agora.',
+    };
+  }
+}
+
+function mapAgendamento(item) {
+  const dataIso = text(item.dataAtendimentoIso || item.dataAtendimento);
+  const dataLabel = text(item.dataLabel) || formatDateLabel(dataIso);
+  const horarioInicio = text(item.horarioInicio);
+  const horarioFim = text(item.horarioFim);
+  const status = text(item.status || 'agendado');
+
+  return {
+    _id: item._id,
+    protocolo: text(item.protocolo),
+
+    unidadeSlug: text(item.unidadeSlug),
+    unidadeNome: text(item.unidadeNome),
+
+    dataIso,
+    dataLabel,
+    horarioInicio,
+    horarioFim,
+
+    nomeAdvogado: text(item.nomeAdvogado),
+    numeroOab: text(item.numeroOab),
+    emailAdvogado: text(item.emailAdvogado),
+    telefoneAdvogado: text(item.telefoneAdvogado),
+
+    nomeIpl: text(item.nomeIpl),
+    infopen: text(item.infopen),
+
+    status,
+    statusLabel: getStatusLabel(status),
+
+    criadoEm: item.criadoEm || item._createdDate || null,
+    atualizadoEm: item.atualizadoEm || item._updatedDate || null,
+    canceladoEm: item.canceladoEm || null,
+  };
+}
+
+function matchesBusca(item, busca) {
+  const haystack = normalizeSearch(
+    [
+      item.protocolo,
+      item.unidadeNome,
+      item.nomeAdvogado,
+      item.numeroOab,
+      item.emailAdvogado,
+      item.nomeIpl,
+      item.infopen,
+      item.statusLabel,
+    ].join(' ')
+  );
+
+  return haystack.includes(busca);
+}
+
+function getStatusLabel(status) {
+  const s = text(status).toLowerCase();
+
+  const labels = {
+    agendado: 'Agendado',
+    cancelado: 'Cancelado',
+    realizado: 'Realizado',
+    reagendado: 'Reagendado',
+  };
+
+  return labels[s] || status || 'Agendado';
+}
+
+function formatDateLabel(dataIso) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(text(dataIso))) {
+    return '';
+  }
+
+  const [yyyy, mm, dd] = dataIso.split('-').map(Number);
+  const date = new Date(yyyy, mm - 1, dd, 12, 0, 0);
+
+  const dias = [
+    'Domingo',
+    'Segunda',
+    'Terça',
+    'Quarta',
+    'Quinta',
+    'Sexta',
+    'Sábado',
+  ];
+
+  return `${dias[date.getDay()]}, ${pad2(dd)}/${pad2(mm)}`;
+}
+
+function normalizeDateIso(value) {
+  if (!value) return '';
+
+  if (typeof value === 'string') {
+    const v = value.trim();
+
+    if (/^\d{4}-\d{2}-\d{2}$/.test(v)) {
+      return v;
+    }
+
+    const parsed = new Date(v);
+
+    if (!Number.isNaN(parsed.getTime())) {
+      return dateToIso(parsed);
+    }
+
+    return '';
+  }
+
+  if (value instanceof Date && !Number.isNaN(value.getTime())) {
+    return dateToIso(value);
+  }
+
+  return '';
+}
+
+function dateToIso(date) {
+  const yyyy = date.getFullYear();
+  const mm = pad2(date.getMonth() + 1);
+  const dd = pad2(date.getDate());
+
+  return `${yyyy}-${mm}-${dd}`;
+}
+
+function normalizeSearch(value) {
+  return text(value)
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '');
+}
+
+function pad2(n) {
+  return String(n).padStart(2, '0');
+}
+
+function text(v) {
+  return v === null || v === undefined ? '' : String(v).trim();
+}

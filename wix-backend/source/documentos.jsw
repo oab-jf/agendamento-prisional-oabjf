@@ -1,0 +1,1159 @@
+import wixData from 'wix-data';
+import { fetch } from 'wix-fetch';
+import { getSecret } from 'wix-secrets-backend';
+
+const COL = {
+  SOLICITACOES_DOCUMENTOS: 'Import4260',
+  UNIDADES: 'Import4258',
+};
+
+const TIPOS_DOCUMENTO_VALIDOS = ['procuracao', 'documento_complementar', 'outro'];
+
+const INFOBIP_EMAIL_ENDPOINT = '/email/3/send';
+
+export async function confirmarSolicitacaoDocumento(payload = {}) {
+  try {
+    const dados = normalizarPayload(payload);
+    const validacao = validarCamposObrigatorios(dados);
+
+    if (!validacao.ok) {
+      return validacao;
+    }
+
+    const agora = new Date();
+    const protocolo = gerarProtocolo(agora);
+    const item = montarItemSolicitacao(dados, protocolo, agora);
+
+    const salvo = await wixData.insert(COL.SOLICITACOES_DOCUMENTOS, item, {
+      suppressAuth: true,
+    });
+
+    let registroAtual = salvo;
+    let emailDestino = dados.unidadeEmailDestino;
+
+    try {
+      const destino = await buscarEmailDestinoUnidade(
+        dados.unidadeSlug,
+        dados.unidadeEmailDestino
+      );
+
+      emailDestino = destino.email;
+
+      const envio = await enviarEmailDocumentoParaUnidade({
+        dados,
+        protocolo,
+        emailDestino,
+      });
+
+      if (!envio.ok) {
+        throw new Error(envio.mensagem || 'Falha no envio pela Infobip.');
+      }
+
+      registroAtual = await atualizarSolicitacaoDocumento(salvo, {
+        status: 'recebido',
+        mensagemErro: '',
+        unidadeEmailDestino: emailDestino,
+        emailUnidadeEnviado: true,
+        emailUnidadeEnviadoEm: new Date(),
+      });
+
+      const auditoriaEmailAdvogado = await tentarEnviarEmailDocumentoParaAdvogado({
+        dados,
+        protocolo,
+      });
+
+      registroAtual = await registrarAuditoriaEmailAdvogadoDocumento(
+        registroAtual,
+        auditoriaEmailAdvogado
+      );
+
+      return {
+        ok: true,
+        protocolo,
+        solicitacaoId: salvo._id,
+        status: 'recebido',
+        emailUnidadeEnviado: true,
+        emailAdvogadoEnviado: auditoriaEmailAdvogado.emailAdvogadoEnviado,
+        mensagem: 'Solicitação registrada e enviada à unidade prisional.',
+      };
+    } catch (errEnvio) {
+      const mensagemErro = normalizarMensagemErro(errEnvio);
+
+      registroAtual = await atualizarSolicitacaoDocumento(salvo, {
+        status: 'com_erro',
+        mensagemErro,
+        unidadeEmailDestino: emailDestino || '',
+        emailUnidadeEnviado: false,
+        emailUnidadeEnviadoEm: null,
+      });
+
+      const auditoriaEmailAdvogado = await tentarEnviarEmailDocumentoParaAdvogado({
+        dados,
+        protocolo,
+      });
+
+      registroAtual = await registrarAuditoriaEmailAdvogadoDocumento(
+        registroAtual,
+        auditoriaEmailAdvogado
+      );
+
+      return {
+        ok: true,
+        protocolo,
+        solicitacaoId: salvo._id,
+        status: 'com_erro',
+        emailUnidadeEnviado: false,
+        emailAdvogadoEnviado: auditoriaEmailAdvogado.emailAdvogadoEnviado,
+        codigo: 'EMAIL_NAO_ENVIADO',
+        mensagem:
+          'Solicitação registrada, mas houve falha no envio automático para a unidade.',
+      };
+    }
+  } catch (err) {
+    console.error('Erro ao confirmar solicitação de documento:', err);
+
+    return {
+      ok: false,
+      codigo: 'ERRO_INTERNO',
+      mensagem:
+        'Não foi possível registrar a solicitação agora. Tente novamente em instantes.',
+    };
+  }
+}
+
+function normalizarPayload(payload = {}) {
+  const oabUf = lettersOnly(payload.oabUf).toUpperCase().slice(0, 2);
+  const oabNumero = digitsOnly(payload.oabNumero);
+  const numeroOabInformado = text(payload.numeroOab);
+  const numeroOab =
+    numeroOabInformado || (oabUf && oabNumero ? `${oabUf}-${oabNumero}` : '');
+
+  const emailAdvogado = normalizeEmail(payload.advEmail || payload.emailAdvogado);
+  const tipoDocumento = text(payload.tipoDocumento);
+  const tipoDocumentoLabel = text(payload.tipoDocumentoLabel);
+  const arquivoPrincipalUrl = text(payload.arquivoPrincipalUrl);
+  const arquivoPrincipalNome = text(payload.arquivoPrincipalNome);
+
+  const arquivos = Array.isArray(payload.arquivos) ? payload.arquivos : [];
+  const arquivosNormalizados = arquivos
+    .map((arquivo) => ({
+      url: text(arquivo.url || arquivo.fileUrl),
+      nome: text(arquivo.nome || arquivo.name || arquivo.fileName),
+    }))
+    .filter((arquivo) => arquivo.url);
+
+  const arquivosJson = JSON.stringify(
+    arquivosNormalizados.length
+      ? arquivosNormalizados
+      : [
+          {
+            url: arquivoPrincipalUrl,
+            nome: arquivoPrincipalNome,
+          },
+        ].filter((arquivo) => arquivo.url)
+  );
+
+  return {
+    unidadeSlug: text(payload.unidadeSlug),
+    unidadeNome: text(payload.unidadeNome),
+
+    nomeAdvogado: text(payload.advNome || payload.nomeAdvogado).replace(/\s+/g, ' '),
+    oabUf,
+    oabNumero,
+    numeroOab,
+    emailAdvogado,
+    emailIndex: emailAdvogado,
+    telefoneAdvogado: digitsOnly(payload.advTelefone || payload.telefoneAdvogado).slice(0, 11),
+
+    nomeIpl: text(payload.nomeIpl).replace(/\s+/g, ' '),
+    infopen: digitsOnly(payload.infopen).slice(0, 10),
+
+    tipoDocumento,
+    tipoDocumentoLabel,
+    arquivoPrincipalUrl,
+    arquivoPrincipalNome,
+    arquivosJson,
+    observacoesAdvogado: text(payload.observacoesAdvogado).replace(/\s+/g, ' '),
+
+    unidadeEmailDestino: normalizeEmail(payload.unidadeEmailDestino),
+  };
+}
+
+function validarCamposObrigatorios(dados) {
+  const erros = [];
+
+  if (!dados.unidadeSlug) erros.push('Unidade prisional não informada.');
+  if (!dados.unidadeNome) erros.push('Nome da unidade prisional não informado.');
+
+  if (
+    !dados.nomeAdvogado ||
+    dados.nomeAdvogado.length < 3 ||
+    !dados.nomeAdvogado.includes(' ')
+  ) {
+    erros.push('Nome completo do advogado inválido.');
+  }
+
+  if (!/^[A-Z]{2}-\d{4,}$/.test(dados.numeroOab)) {
+    erros.push('OAB inválida.');
+  }
+
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(dados.emailAdvogado)) {
+    erros.push('E-mail do advogado inválido.');
+  }
+
+  if (![10, 11].includes(dados.telefoneAdvogado.length)) {
+    erros.push('Telefone do advogado inválido.');
+  }
+
+  if (!dados.nomeIpl || dados.nomeIpl.length < 3) {
+    erros.push('Nome da IPL inválido.');
+  }
+
+  if (dados.infopen && dados.infopen.length < 5) {
+    erros.push('INFOPEN inválido.');
+  }
+
+  if (!TIPOS_DOCUMENTO_VALIDOS.includes(dados.tipoDocumento)) {
+    erros.push('Tipo de documento inválido.');
+  }
+
+  if (!dados.arquivoPrincipalUrl) {
+    erros.push('Arquivo do documento não enviado.');
+  }
+
+  if (!dados.arquivoPrincipalNome) {
+    erros.push('Nome do arquivo não identificado.');
+  }
+
+  if (erros.length) {
+    return {
+      ok: false,
+      codigo: 'DADOS_INVALIDOS',
+      mensagem: erros.join('\n'),
+    };
+  }
+
+  return { ok: true };
+}
+
+function montarItemSolicitacao(dados, protocolo, agora) {
+  const tipoLabel = dados.tipoDocumentoLabel || dados.tipoDocumento;
+
+  return {
+    title: `${protocolo} - ${dados.unidadeNome} - ${tipoLabel}`,
+    protocolo,
+
+    unidadeSlug: dados.unidadeSlug,
+    unidadeNome: dados.unidadeNome,
+
+    nomeAdvogado: dados.nomeAdvogado,
+    numeroOab: dados.numeroOab,
+    emailAdvogado: dados.emailAdvogado,
+    emailIndex: dados.emailIndex,
+    telefoneAdvogado: dados.telefoneAdvogado,
+
+    nomeIpl: dados.nomeIpl,
+    infopen: dados.infopen,
+
+    tipoDocumento: dados.tipoDocumento,
+    arquivoPrincipalUrl: dados.arquivoPrincipalUrl,
+    arquivoPrincipalNome: dados.arquivoPrincipalNome,
+    arquivosJson: dados.arquivosJson,
+    observacoesAdvogado: dados.observacoesAdvogado,
+
+    status: 'recebido',
+    mensagemErro: '',
+    unidadeEmailDestino: dados.unidadeEmailDestino,
+    emailUnidadeEnviado: false,
+    emailUnidadeEnviadoEm: null,
+
+    emailAdvogadoEnviado: false,
+    emailAdvogadoDestino: dados.emailAdvogado,
+    emailAdvogadoErro: '',
+    emailAdvogadoEnviadoEm: null,
+
+    criadoEm: agora,
+    atualizadoEm: agora,
+  };
+}
+
+async function atualizarSolicitacaoDocumento(itemSalvo, patch = {}) {
+  const atualizado = {
+    ...itemSalvo,
+    ...patch,
+    atualizadoEm: new Date(),
+  };
+
+  return wixData.update(COL.SOLICITACOES_DOCUMENTOS, atualizado, {
+    suppressAuth: true,
+  });
+}
+
+async function buscarEmailDestinoUnidade(unidadeSlug, fallbackEmail = '') {
+  const fallback = normalizeEmail(fallbackEmail);
+
+  if (isValidEmail(fallback)) {
+    return {
+      email: fallback,
+      origem: 'payload',
+    };
+  }
+
+  const result = await wixData
+    .query(COL.UNIDADES)
+    .eq('slug', unidadeSlug)
+    .limit(1)
+    .find({ suppressAuth: true });
+
+  const unidade = result.items[0];
+
+  if (!unidade) {
+    throw new Error(`Unidade não encontrada para o slug: ${unidadeSlug}`);
+  }
+
+  const email =
+    normalizeEmail(unidade.emailAgenda) ||
+    normalizeEmail(unidade.emailDestino) ||
+    normalizeEmail(unidade.emailDocumentos);
+
+  if (!isValidEmail(email)) {
+    throw new Error(
+      `A unidade ${unidade.nome || unidadeSlug} não possui emailAgenda válido.`
+    );
+  }
+
+  return {
+    email,
+    origem: 'UnidadesPrisionais.emailAgenda',
+    unidade,
+  };
+}
+
+
+async function registrarAuditoriaEmailAdvogadoDocumento(itemAtual, auditoria = {}) {
+  try {
+    return await atualizarSolicitacaoDocumento(itemAtual, auditoria);
+  } catch (err) {
+    console.warn(
+      'Solicitação registrada, mas não foi possível gravar auditoria do e-mail ao advogado.',
+      err
+    );
+    return itemAtual;
+  }
+}
+
+async function tentarEnviarEmailDocumentoParaAdvogado({ dados, protocolo }) {
+  const emailDestino = normalizeEmail(dados.emailAdvogado);
+
+  try {
+    const envio = await enviarEmailDocumentoParaAdvogado({
+      dados,
+      protocolo,
+      emailDestino,
+    });
+
+    if (!envio.ok) {
+      throw new Error(envio.mensagem || 'Falha no envio da confirmação ao advogado.');
+    }
+
+    return {
+      emailAdvogadoEnviado: true,
+      emailAdvogadoDestino: emailDestino,
+      emailAdvogadoErro: '',
+      emailAdvogadoEnviadoEm: new Date(),
+    };
+  } catch (err) {
+    const mensagemErro = normalizarMensagemErro(err);
+
+    console.warn(
+      `Documento ${protocolo} registrado, mas a confirmação ao advogado não foi enviada.`,
+      err
+    );
+
+    return {
+      emailAdvogadoEnviado: false,
+      emailAdvogadoDestino: emailDestino,
+      emailAdvogadoErro: mensagemErro,
+      emailAdvogadoEnviadoEm: null,
+    };
+  }
+}
+
+async function enviarEmailDocumentoParaAdvogado({ dados, protocolo, emailDestino }) {
+  const config = await carregarConfigInfobip();
+  const assunto = `[OAB/JF] Confirmação de envio de documento - ${protocolo}`;
+
+  const corpoTexto = montarEmailTextoDocumentoAdvogado({
+    dados,
+    protocolo,
+  });
+
+  const corpoHtml = montarEmailHtmlDocumentoAdvogado({
+    dados,
+    protocolo,
+    logoUrl: config.logoUrl,
+  });
+
+  return enviarEmailInfobip({
+    config,
+    to: emailDestino,
+    subject: assunto,
+    textBody: corpoTexto,
+    htmlBody: corpoHtml,
+  });
+}
+
+function montarEmailTextoDocumentoAdvogado({ dados, protocolo }) {
+  const tipoDocumento = dados.tipoDocumentoLabel || dados.tipoDocumento;
+
+  return [
+    `Olá, ${dados.nomeAdvogado}.`,
+    '',
+    'Seu envio de documento/procuração foi registrado pela Central de Agendamentos Prisionais da OAB Juiz de Fora.',
+    '',
+    `Protocolo: ${protocolo}`,
+    `Unidade prisional: ${dados.unidadeNome}`,
+    `Tipo de documento: ${tipoDocumento}`,
+    `Nome da IPL: ${dados.nomeIpl}`,
+    `Arquivo enviado: ${dados.arquivoPrincipalNome}`,
+    '',
+    'Guarde este protocolo para acompanhamento junto à OAB Juiz de Fora.',
+    '',
+    'A unidade prisional devolverá o documento assinado diretamente ao advogado, conforme fluxo definido.',
+    '',
+    'Este é um e-mail automático da Central de Agendamentos Prisionais da OAB Juiz de Fora.',
+  ].join('\n');
+}
+
+function montarEmailHtmlDocumentoAdvogado({ dados, protocolo, logoUrl }) {
+  const tipoDocumento = dados.tipoDocumentoLabel || dados.tipoDocumento;
+
+  const logoHtml = logoUrl
+    ? `
+      <img
+        src="${escapeHtml(logoUrl)}"
+        alt="OAB Juiz de Fora"
+        width="120"
+        style="display:block;max-width:120px;height:auto;border:0;margin:0;"
+      />
+    `
+    : `
+      <div style="font-family:Arial,Helvetica,sans-serif;font-size:22px;font-weight:700;letter-spacing:-0.02em;color:#111827;">
+        OAB<span style="color:#b42318;">.</span>
+      </div>
+      <div style="font-family:Arial,Helvetica,sans-serif;font-size:11px;text-transform:uppercase;letter-spacing:0.16em;color:#1d4ed8;margin-top:4px;">
+        Juiz de Fora
+      </div>
+    `;
+
+  const linhas = [
+    ['Protocolo', protocolo],
+    ['Unidade prisional', dados.unidadeNome],
+    ['Tipo de documento', tipoDocumento],
+    ['Nome da IPL', dados.nomeIpl],
+    ['Arquivo enviado', dados.arquivoPrincipalNome],
+  ];
+
+  return `
+    <!doctype html>
+    <html>
+      <body style="margin:0;padding:0;background:#f5f2ed;">
+        <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="border-collapse:collapse;background:#f5f2ed;">
+          <tr>
+            <td align="center" style="padding:28px 14px;">
+              <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="border-collapse:collapse;max-width:720px;background:#ffffff;border:1px solid #e7e2d8;border-radius:14px;overflow:hidden;">
+                <tr>
+                  <td style="padding:0;">
+                    <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="border-collapse:collapse;">
+                      <tr>
+                        <td style="height:5px;background:#b42318;width:25%;font-size:0;line-height:0;">&nbsp;</td>
+                        <td style="height:5px;background:#ffffff;width:50%;font-size:0;line-height:0;">&nbsp;</td>
+                        <td style="height:5px;background:#1d4ed8;width:25%;font-size:0;line-height:0;">&nbsp;</td>
+                      </tr>
+                    </table>
+                  </td>
+                </tr>
+
+                <tr>
+                  <td style="padding:26px 30px 20px 30px;border-bottom:1px solid #eee8dc;">
+                    <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="border-collapse:collapse;">
+                      <tr>
+                        <td style="vertical-align:middle;width:150px;">
+                          ${logoHtml}
+                        </td>
+                        <td style="vertical-align:middle;text-align:right;">
+                          <div style="font-family:Arial,Helvetica,sans-serif;font-size:11px;text-transform:uppercase;letter-spacing:0.14em;color:#7a6f63;">
+                            Central de Agendamentos Prisionais
+                          </div>
+                          <div style="font-family:Arial,Helvetica,sans-serif;font-size:13px;color:#374151;margin-top:4px;">
+                            Confirmação de envio de documento
+                          </div>
+                        </td>
+                      </tr>
+                    </table>
+                  </td>
+                </tr>
+
+                <tr>
+                  <td style="padding:30px 30px 10px 30px;">
+                    <h1 style="margin:0;font-family:Arial,Helvetica,sans-serif;font-size:24px;line-height:1.25;color:#111827;">
+                      Documento registrado
+                    </h1>
+                    <p style="margin:10px 0 0 0;font-family:Arial,Helvetica,sans-serif;font-size:14px;line-height:1.6;color:#4b5563;">
+                      Olá, ${escapeHtml(dados.nomeAdvogado)}. Seu envio de documento/procuração foi registrado pela Central de Agendamentos Prisionais da OAB Juiz de Fora.
+                    </p>
+                  </td>
+                </tr>
+
+                <tr>
+                  <td style="padding:18px 30px 20px 30px;">
+                    ${montarBlocoHtml('Dados da solicitação', linhas)}
+                  </td>
+                </tr>
+
+                <tr>
+                  <td style="padding:20px 30px;background:#f9fafb;border-top:1px solid #eee8dc;">
+                    <p style="margin:0;font-family:Arial,Helvetica,sans-serif;font-size:13px;line-height:1.6;color:#4b5563;">
+                      Guarde este protocolo para acompanhamento junto à OAB Juiz de Fora.
+                    </p>
+                    <p style="margin:12px 0 0 0;font-family:Arial,Helvetica,sans-serif;font-size:13px;line-height:1.6;color:#4b5563;">
+                      A unidade prisional devolverá o documento assinado diretamente ao advogado, conforme fluxo definido.
+                    </p>
+                    <p style="margin:12px 0 0 0;font-family:Arial,Helvetica,sans-serif;font-size:11px;line-height:1.5;color:#9ca3af;">
+                      Este e-mail foi enviado automaticamente pela Central de Agendamentos Prisionais da OAB Juiz de Fora.
+                    </p>
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+        </table>
+      </body>
+    </html>
+  `;
+}
+
+async function enviarEmailDocumentoParaUnidade({ dados, protocolo, emailDestino }) {
+  const config = await carregarConfigInfobip();
+
+  const assunto = `[OAB/JF] Nova solicitação de documento - ${protocolo}`;
+
+  const arquivoUrlEmail = normalizarArquivoUrlParaEmail(dados.arquivoPrincipalUrl);
+
+  if (!isPublicHttpUrl(arquivoUrlEmail)) {
+    return {
+      ok: false,
+      mensagem:
+        'Não foi possível gerar um link público válido para o arquivo enviado.',
+    };
+  }
+
+  const corpoTexto = montarEmailTexto({
+    dados,
+    protocolo,
+    arquivoUrlEmail,
+  });
+
+  const corpoHtml = montarEmailHtml({
+    dados,
+    protocolo,
+    arquivoUrlEmail,
+    logoUrl: config.logoUrl,
+  });
+
+  return enviarEmailInfobip({
+    config,
+    to: emailDestino,
+    subject: assunto,
+    textBody: corpoTexto,
+    htmlBody: corpoHtml,
+  });
+}
+
+async function carregarConfigInfobip() {
+  const [baseUrlRaw, apiKeyRaw, fromEmailRaw, fromNameRaw, logoUrlRaw] = await Promise.all([
+    getRequiredSecret('INFOBIP_BASE_URL'),
+    getRequiredSecret('INFOBIP_API_KEY'),
+    getRequiredSecret('INFOBIP_FROM_EMAIL'),
+    getRequiredSecret('INFOBIP_FROM_NAME'),
+    getOptionalSecret('OAB_EMAIL_LOGO_URL'),
+  ]);
+
+  const baseUrl = normalizarBaseUrl(baseUrlRaw);
+  const apiKey = text(apiKeyRaw);
+  const fromEmail = normalizeEmail(fromEmailRaw);
+  const fromName = text(fromNameRaw) || 'OAB Juiz de Fora';
+
+  const logoUrlNormalizada = normalizarArquivoUrlParaEmail(logoUrlRaw);
+  const logoUrl = isPublicHttpUrl(logoUrlNormalizada) ? logoUrlNormalizada : '';
+
+  if (!baseUrl) {
+    throw new Error('INFOBIP_BASE_URL inválido.');
+  }
+
+  if (!apiKey) {
+    throw new Error('INFOBIP_API_KEY vazio.');
+  }
+
+  if (!isValidEmail(fromEmail)) {
+    throw new Error('INFOBIP_FROM_EMAIL inválido.');
+  }
+
+  return {
+    baseUrl,
+    apiKey,
+    fromEmail,
+    fromName,
+    logoUrl,
+  };
+}
+
+async function getRequiredSecret(secretName) {
+  try {
+    const value = await getSecret(secretName);
+
+    if (!text(value)) {
+      throw new Error(`Secret ${secretName} está vazio.`);
+    }
+
+    return value;
+  } catch (err) {
+    throw new Error(`Secret ${secretName} não configurado ou inacessível.`);
+  }
+}
+
+async function getOptionalSecret(secretName) {
+  try {
+    const value = await getSecret(secretName);
+    return text(value);
+  } catch (err) {
+    return '';
+  }
+}
+
+async function enviarEmailInfobip({ config, to, subject, textBody, htmlBody }) {
+  if (!isValidEmail(to)) {
+    return {
+      ok: false,
+      mensagem: 'E-mail de destino inválido.',
+    };
+  }
+
+  const endpoint = `${config.baseUrl}${INFOBIP_EMAIL_ENDPOINT}`;
+
+  const multipart = montarMultipartFormData({
+    from: formatarRemetente(config.fromName, config.fromEmail),
+    to: JSON.stringify({ to }),
+    subject,
+    text: textBody,
+    html: htmlBody,
+  });
+
+  try {
+    const response = await fetch(endpoint, {
+      method: 'post',
+      headers: {
+        Authorization: montarAuthorizationHeader(config.apiKey),
+        Accept: 'application/json',
+        'Content-Type': `multipart/form-data; boundary=${multipart.boundary}`,
+      },
+      body: multipart.body,
+    });
+
+    const raw = await response.text();
+    const parsed = tryParseJson(raw);
+
+    if (!response.ok) {
+      return {
+        ok: false,
+        statusCode: response.status,
+        mensagem: `Infobip retornou erro ${response.status}: ${limitarTexto(raw, 700)}`,
+      };
+    }
+
+    return {
+      ok: true,
+      statusCode: response.status,
+      resposta: parsed || raw,
+      messageId: extrairInfobipMessageId(parsed),
+    };
+  } catch (err) {
+    return {
+      ok: false,
+      mensagem: normalizarMensagemErro(err),
+    };
+  }
+}
+
+function montarMultipartFormData(fields = {}) {
+  const boundary = `----wix-infobip-${Date.now()}-${Math.random()
+    .toString(36)
+    .slice(2)}`;
+
+  const parts = [];
+
+  Object.keys(fields).forEach((name) => {
+    const value = fields[name];
+
+    if (value === null || value === undefined) return;
+
+    parts.push(`--${boundary}\r\n`);
+    parts.push(`Content-Disposition: form-data; name="${escapeMultipartName(name)}"\r\n\r\n`);
+    parts.push(String(value));
+    parts.push('\r\n');
+  });
+
+  parts.push(`--${boundary}--\r\n`);
+
+  return {
+    boundary,
+    body: parts.join(''),
+  };
+}
+
+function montarAuthorizationHeader(apiKey) {
+  const key = text(apiKey);
+
+  if (/^(App|Basic|Bearer)\s+/i.test(key)) {
+    return key;
+  }
+
+  return `App ${key}`;
+}
+
+function formatarRemetente(nome, email) {
+  const cleanName = text(nome).replace(/[<>"]/g, '');
+  const cleanEmail = normalizeEmail(email);
+
+  if (!cleanName) return cleanEmail;
+
+  return `${cleanName} <${cleanEmail}>`;
+}
+
+function montarEmailTexto({ dados, protocolo, arquivoUrlEmail }) {
+  const infopen = dados.infopen || 'Não informado';
+  const observacoes = dados.observacoesAdvogado || 'Não informado';
+  const tipoDocumento = dados.tipoDocumentoLabel || dados.tipoDocumento;
+  const telefone = formatPhoneBR(dados.telefoneAdvogado);
+
+  return [
+    'Nova solicitação de documento/procuração recebida pela Central de Agendamentos Prisionais da OAB Juiz de Fora.',
+    '',
+    `Protocolo: ${protocolo}`,
+    `Unidade prisional: ${dados.unidadeNome}`,
+    '',
+    'Dados do advogado:',
+    `Nome: ${dados.nomeAdvogado}`,
+    `OAB: ${dados.numeroOab}`,
+    `E-mail: ${dados.emailAdvogado}`,
+    `Telefone: ${telefone}`,
+    '',
+    'Dados da pessoa custodiada:',
+    `Nome da IPL: ${dados.nomeIpl}`,
+    `INFOPEN: ${infopen}`,
+    '',
+    'Documento:',
+    `Tipo: ${tipoDocumento}`,
+    `Arquivo: ${dados.arquivoPrincipalNome}`,
+    `Link do arquivo: ${arquivoUrlEmail}`,
+    '',
+    `Observações: ${observacoes}`,
+    '',
+    'Orientação: a unidade prisional deverá devolver o documento assinado diretamente ao advogado, conforme fluxo definido.',
+  ].join('\n');
+}
+
+function montarEmailHtml({ dados, protocolo, arquivoUrlEmail, logoUrl }) {
+  const infopen = dados.infopen || 'Não informado';
+  const observacoes = dados.observacoesAdvogado || 'Não informado';
+  const tipoDocumento = dados.tipoDocumentoLabel || dados.tipoDocumento;
+  const telefone = formatPhoneBR(dados.telefoneAdvogado);
+
+  const logoHtml = logoUrl
+    ? `
+      <img
+        src="${escapeHtml(logoUrl)}"
+        alt="OAB Juiz de Fora"
+        width="120"
+        style="display:block;max-width:120px;height:auto;border:0;margin:0;"
+      />
+    `
+    : `
+      <div style="font-family:Arial,Helvetica,sans-serif;font-size:22px;font-weight:700;letter-spacing:-0.02em;color:#111827;">
+        OAB<span style="color:#b42318;">.</span>
+      </div>
+      <div style="font-family:Arial,Helvetica,sans-serif;font-size:11px;text-transform:uppercase;letter-spacing:0.16em;color:#1d4ed8;margin-top:4px;">
+        Juiz de Fora
+      </div>
+    `;
+
+  const linhasIdentificacao = [
+    ['Protocolo', protocolo],
+    ['Unidade prisional', dados.unidadeNome],
+    ['Tipo de documento', tipoDocumento],
+    ['Arquivo', dados.arquivoPrincipalNome],
+  ];
+
+  const linhasAdvogado = [
+    ['Advogado(a)', dados.nomeAdvogado],
+    ['OAB', dados.numeroOab],
+    ['E-mail', dados.emailAdvogado],
+    ['Telefone', telefone],
+  ];
+
+  const linhasIpl = [
+    ['Nome da IPL', dados.nomeIpl],
+    ['INFOPEN', infopen],
+    ['Observações', observacoes],
+  ];
+
+  return `
+    <!doctype html>
+    <html>
+      <body style="margin:0;padding:0;background:#f5f2ed;">
+        <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="border-collapse:collapse;background:#f5f2ed;">
+          <tr>
+            <td align="center" style="padding:28px 14px;">
+              <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="border-collapse:collapse;max-width:760px;background:#ffffff;border:1px solid #e7e2d8;border-radius:14px;overflow:hidden;">
+                
+                <tr>
+                  <td style="padding:0;">
+                    <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="border-collapse:collapse;">
+                      <tr>
+                        <td style="height:5px;background:#b42318;width:25%;font-size:0;line-height:0;">&nbsp;</td>
+                        <td style="height:5px;background:#ffffff;width:50%;font-size:0;line-height:0;">&nbsp;</td>
+                        <td style="height:5px;background:#1d4ed8;width:25%;font-size:0;line-height:0;">&nbsp;</td>
+                      </tr>
+                    </table>
+                  </td>
+                </tr>
+
+                <tr>
+                  <td style="padding:26px 30px 20px 30px;border-bottom:1px solid #eee8dc;">
+                    <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="border-collapse:collapse;">
+                      <tr>
+                        <td style="vertical-align:middle;width:150px;">
+                          ${logoHtml}
+                        </td>
+                        <td style="vertical-align:middle;text-align:right;">
+                          <div style="font-family:Arial,Helvetica,sans-serif;font-size:11px;text-transform:uppercase;letter-spacing:0.14em;color:#7a6f63;">
+                            Central de Agendamentos Prisionais
+                          </div>
+                          <div style="font-family:Arial,Helvetica,sans-serif;font-size:13px;color:#374151;margin-top:4px;">
+                            Solicitação de documento/procuração
+                          </div>
+                        </td>
+                      </tr>
+                    </table>
+                  </td>
+                </tr>
+
+                <tr>
+                  <td style="padding:30px 30px 10px 30px;">
+                    <h1 style="margin:0;font-family:Arial,Helvetica,sans-serif;font-size:24px;line-height:1.25;color:#111827;">
+                      Nova solicitação de documento
+                    </h1>
+
+                    <p style="margin:10px 0 0 0;font-family:Arial,Helvetica,sans-serif;font-size:14px;line-height:1.6;color:#4b5563;">
+                      Uma nova solicitação foi registrada pela Central de Agendamentos Prisionais da OAB Juiz de Fora.
+                    </p>
+                  </td>
+                </tr>
+
+                <tr>
+                  <td style="padding:18px 30px 8px 30px;">
+                    ${montarBlocoHtml('Identificação da solicitação', linhasIdentificacao)}
+                  </td>
+                </tr>
+
+                <tr>
+                  <td style="padding:8px 30px;">
+                    ${montarBlocoHtml('Dados do advogado', linhasAdvogado)}
+                  </td>
+                </tr>
+
+                <tr>
+                  <td style="padding:8px 30px 20px 30px;">
+                    ${montarBlocoHtml('Dados da pessoa custodiada', linhasIpl)}
+                  </td>
+                </tr>
+
+                <tr>
+                  <td align="center" style="padding:4px 30px 30px 30px;">
+                    <a
+                      href="${escapeHtml(arquivoUrlEmail)}"
+                      style="display:inline-block;background:#111827;color:#ffffff;text-decoration:none;font-family:Arial,Helvetica,sans-serif;font-size:14px;font-weight:700;padding:13px 22px;border-radius:8px;"
+                    >
+                      Abrir arquivo enviado
+                    </a>
+
+                    <p style="margin:14px 0 0 0;font-family:Arial,Helvetica,sans-serif;font-size:12px;line-height:1.5;color:#6b7280;">
+                      Caso o botão não funcione, acesse o arquivo pelo painel administrativo da OAB.
+                    </p>
+                  </td>
+                </tr>
+
+                <tr>
+                  <td style="padding:20px 30px;background:#f9fafb;border-top:1px solid #eee8dc;">
+                    <p style="margin:0;font-family:Arial,Helvetica,sans-serif;font-size:13px;line-height:1.6;color:#4b5563;">
+                      A unidade prisional deverá devolver o documento assinado diretamente ao advogado,
+                      conforme fluxo definido.
+                    </p>
+
+                    <p style="margin:12px 0 0 0;font-family:Arial,Helvetica,sans-serif;font-size:11px;line-height:1.5;color:#9ca3af;">
+                      Este e-mail foi enviado automaticamente pela Central de Agendamentos Prisionais da OAB Juiz de Fora.
+                    </p>
+                  </td>
+                </tr>
+
+              </table>
+            </td>
+          </tr>
+        </table>
+      </body>
+    </html>
+  `;
+}
+
+function montarBlocoHtml(titulo, linhas = []) {
+  const rowsHtml = linhas
+    .map(
+      ([label, value]) => `
+        <tr>
+          <td style="padding:9px 12px;border-bottom:1px solid #f0f0f0;color:#6b7280;width:210px;font-family:Arial,Helvetica,sans-serif;font-size:13px;">
+            ${escapeHtml(label)}
+          </td>
+          <td style="padding:9px 12px;border-bottom:1px solid #f0f0f0;color:#111827;font-weight:700;font-family:Arial,Helvetica,sans-serif;font-size:13px;">
+            ${escapeHtml(value)}
+          </td>
+        </tr>
+      `
+    )
+    .join('');
+
+  return `
+    <div style="border:1px solid #ece7dd;border-radius:10px;overflow:hidden;">
+      <div style="background:#faf7f1;padding:11px 14px;border-bottom:1px solid #ece7dd;font-family:Arial,Helvetica,sans-serif;font-size:13px;font-weight:700;color:#111827;">
+        ${escapeHtml(titulo)}
+      </div>
+
+      <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="border-collapse:collapse;background:#ffffff;">
+        ${rowsHtml}
+      </table>
+    </div>
+  `;
+}
+
+function normalizarArquivoUrlParaEmail(url) {
+  const value = text(url);
+
+  if (!value) return '';
+
+  if (/^https?:\/\//i.test(value)) {
+    return value;
+  }
+
+  if (value.startsWith('wix:image://v1/')) {
+    const media = extrairWixMediaParts(value);
+
+    if (media.fileId) {
+      return `https://static.wixstatic.com/media/${media.fileId}`;
+    }
+  }
+
+  if (value.startsWith('wix:document://v1/')) {
+    const media = extrairWixMediaParts(value);
+
+    if (media.fileId) {
+      const downloadName = media.fileName
+        ? `?dn=${encodeURIComponent(media.fileName)}`
+        : '';
+
+      return `https://static.wixstatic.com/ugd/${media.fileId}${downloadName}`;
+    }
+  }
+
+  if (value.startsWith('wix:video://v1/')) {
+    const media = extrairWixMediaParts(value);
+
+    if (media.fileId) {
+      return `https://video.wixstatic.com/video/${media.fileId}`;
+    }
+  }
+
+  return value;
+}
+
+function extrairWixMediaParts(value) {
+  const semHash = text(value).split('#')[0];
+  const semPrefixo = semHash.replace(/^wix:[a-z]+:\/\/v1\//i, '');
+  const partes = semPrefixo.split('/').filter(Boolean);
+
+  const fileId = partes[0] || '';
+  const fileName =
+    partes.length > 1 ? decodeURIComponentSafe(partes.slice(1).join('/')) : '';
+
+  return {
+    fileId,
+    fileName,
+  };
+}
+
+function decodeURIComponentSafe(value) {
+  try {
+    return decodeURIComponent(value);
+  } catch (err) {
+    return value;
+  }
+}
+
+function isPublicHttpUrl(value) {
+  return /^https?:\/\//i.test(text(value));
+}
+
+function extrairInfobipMessageId(parsed) {
+  try {
+    if (!parsed) return '';
+
+    if (parsed.messages && parsed.messages[0] && parsed.messages[0].messageId) {
+      return parsed.messages[0].messageId;
+    }
+
+    if (parsed.messageId) {
+      return parsed.messageId;
+    }
+
+    return '';
+  } catch (err) {
+    return '';
+  }
+}
+
+function tryParseJson(raw) {
+  try {
+    return raw ? JSON.parse(raw) : null;
+  } catch (err) {
+    return null;
+  }
+}
+
+function normalizarBaseUrl(value) {
+  let url = text(value);
+
+  if (!url) return '';
+
+  if (!/^https?:\/\//i.test(url)) {
+    url = `https://${url}`;
+  }
+
+  return url.replace(/\/+$/, '');
+}
+
+function gerarProtocolo(date) {
+  const yyyy = date.getFullYear();
+  const mm = pad2(date.getMonth() + 1);
+  const dd = pad2(date.getDate());
+  const hh = pad2(date.getHours());
+  const mi = pad2(date.getMinutes());
+  const ss = pad2(date.getSeconds());
+  const rand = randomToken(4);
+
+  return `DOC-${yyyy}${mm}${dd}-${hh}${mi}${ss}-${rand}`;
+}
+
+function randomToken(length) {
+  let out = '';
+  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+
+  for (let i = 0; i < length; i += 1) {
+    out += chars[Math.floor(Math.random() * chars.length)];
+  }
+
+  return out;
+}
+
+function pad2(n) {
+  return String(n).padStart(2, '0');
+}
+
+function text(v) {
+  return v === null || v === undefined ? '' : String(v).trim();
+}
+
+function digitsOnly(v) {
+  return v === null || v === undefined ? '' : String(v).replace(/\D/g, '');
+}
+
+function lettersOnly(v) {
+  return v === null || v === undefined ? '' : String(v).replace(/[^a-zA-Z]/g, '');
+}
+
+function normalizeEmail(v) {
+  return text(v).toLowerCase();
+}
+
+function isValidEmail(v) {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(text(v));
+}
+
+function formatPhoneBR(raw) {
+  const d = digitsOnly(raw).slice(0, 11);
+
+  if (!d) return '';
+
+  if (d.length <= 2) {
+    return `(${d}`;
+  }
+
+  const dd = d.slice(0, 2);
+  const rest = d.slice(2);
+
+  if (d.length <= 6) {
+    return `(${dd}) ${rest}`;
+  }
+
+  if (d.length <= 10) {
+    return `(${dd}) ${rest.slice(0, 4)}-${rest.slice(4)}`;
+  }
+
+  return `(${dd}) ${rest.slice(0, 5)}-${rest.slice(5)}`;
+}
+
+function escapeHtml(value) {
+  return text(value)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#039;');
+}
+
+function escapeMultipartName(value) {
+  return text(value).replace(/"/g, '');
+}
+
+function limitarTexto(value, max = 500) {
+  const v = text(value);
+
+  if (v.length <= max) return v;
+
+  return `${v.slice(0, max)}...`;
+}
+
+function normalizarMensagemErro(err) {
+  if (!err) return 'Erro desconhecido.';
+
+  if (typeof err === 'string') {
+    return limitarTexto(err, 900);
+  }
+
+  if (err.message) {
+    return limitarTexto(err.message, 900);
+  }
+
+  try {
+    return limitarTexto(JSON.stringify(err), 900);
+  } catch (jsonErr) {
+    return 'Erro não identificado.';
+  }
+}

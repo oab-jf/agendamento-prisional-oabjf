@@ -10,6 +10,7 @@
     "build": "vite build",
     "build:pages": "vite build --config vite.pages.config.ts",
     "build:dev": "vite build --mode development",
+    "test:agendamentos-domain": "node --test wix-backend/tests/*.test.mjs",
     "preview": "vite preview",
     "lint": "eslint .",
     "format": "prettier --write ."
@@ -88,4 +89,3 @@
     "vite": "^7.3.1"
   }
 }
-

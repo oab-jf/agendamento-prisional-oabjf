@@ -1,0 +1,584 @@
+// backend/disponibilidade.jsw
+import wixData from 'wix-data';
+
+const TZ = 'America/Sao_Paulo';
+
+const COL = {
+  UNIDADES: 'Import4258',
+  REGRAS: 'Import4257',
+  BLOQUEIOS: 'Import4256',
+  AGENDAMENTOS: 'Import4259',
+};
+
+const DATA_OPTIONS = {
+  suppressAuth: true,
+};
+
+function text(v) {
+  return (v === null || v === undefined) ? '' : String(v).trim();
+}
+
+function lower(v) {
+  return text(v).toLowerCase();
+}
+
+function isTrue(v) {
+  if (v === true) return true;
+
+  const s = lower(v);
+  return s === 'true' || s === 'sim' || s === '1' || s === 'yes';
+}
+
+function getField(item, possibleKeys) {
+  if (!item || !Array.isArray(possibleKeys)) return undefined;
+
+  for (const key of possibleKeys) {
+    if (Object.prototype.hasOwnProperty.call(item, key)) {
+      return item[key];
+    }
+  }
+
+  return undefined;
+}
+
+function onlyDateIsoFromDate(date) {
+  const y = date.getUTCFullYear();
+  const m = String(date.getUTCMonth() + 1).padStart(2, '0');
+  const d = String(date.getUTCDate()).padStart(2, '0');
+
+  return `${y}-${m}-${d}`;
+}
+
+function toIsoDate(value) {
+  if (!value) return '';
+
+  if (value instanceof Date) {
+    return onlyDateIsoFromDate(value);
+  }
+
+  const s = text(value);
+
+  const match = s.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (match) {
+    return `${match[1]}-${match[2]}-${match[3]}`;
+  }
+
+  return '';
+}
+
+function dateFromIsoNoonUTC(iso) {
+  const [y, m, d] = iso.split('-').map(Number);
+  return new Date(Date.UTC(y, m - 1, d, 12, 0, 0));
+}
+
+function addDaysIso(iso, days) {
+  const date = dateFromIsoNoonUTC(iso);
+  date.setUTCDate(date.getUTCDate() + days);
+
+  return onlyDateIsoFromDate(date);
+}
+
+function getWeekdayNumber(iso) {
+  const date = dateFromIsoNoonUTC(iso);
+  return date.getUTCDay(); // 0 domingo, 1 segunda, ..., 6 sábado
+}
+
+function isBusinessDay(iso) {
+  const d = getWeekdayNumber(iso);
+  return d >= 1 && d <= 5;
+}
+
+function weekdayLabel(iso) {
+  const labels = [
+    'Domingo',
+    'Segunda',
+    'Terça',
+    'Quarta',
+    'Quinta',
+    'Sexta',
+    'Sábado',
+  ];
+
+  const date = dateFromIsoNoonUTC(iso);
+  const dd = String(date.getUTCDate()).padStart(2, '0');
+  const mm = String(date.getUTCMonth() + 1).padStart(2, '0');
+
+  return `${labels[date.getUTCDay()]}, ${dd}/${mm}`;
+}
+
+function getNowSaoPauloParts() {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: TZ,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    hourCycle: 'h23',
+  }).formatToParts(new Date());
+
+  const map = {};
+
+  parts.forEach((p) => {
+    map[p.type] = p.value;
+  });
+
+  const iso = `${map.year}-${map.month}-${map.day}`;
+
+  return {
+    iso,
+    hour: Number(map.hour),
+    minute: Number(map.minute),
+  };
+}
+
+function previousBusinessDayIso(iso) {
+  let cursor = addDaysIso(iso, -1);
+
+  while (!isBusinessDay(cursor)) {
+    cursor = addDaysIso(cursor, -1);
+  }
+
+  return cursor;
+}
+
+function isDeadlineOpenForDate(dataIso) {
+  const now = getNowSaoPauloParts();
+  const deadlineIso = previousBusinessDayIso(dataIso);
+
+  if (now.iso < deadlineIso) return true;
+  if (now.iso > deadlineIso) return false;
+
+  // No dia limite, só permite antes das 17:00.
+  return now.hour < 17;
+}
+
+function timeToMinutes(hhmm) {
+  const s = text(hhmm);
+  const match = s.match(/^(\d{2}):(\d{2})$/);
+
+  if (!match) return null;
+
+  return Number(match[1]) * 60 + Number(match[2]);
+}
+
+function minutesToTime(total) {
+  const h = Math.floor(total / 60);
+  const m = total % 60;
+
+  return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
+}
+
+function buildSlotsFromRegra(regra) {
+  const start = timeToMinutes(regra.horaInicio || '09:00');
+  const lastStart = timeToMinutes(regra.horaUltimoInicio || regra.horaFim || '16:30');
+  const duration = Number(regra.duracaoMinutos || 30);
+
+  if (start === null || lastStart === null || !duration || duration <= 0) {
+    return [];
+  }
+
+  const slots = [];
+
+  for (let t = start; t <= lastStart; t += duration) {
+    slots.push({
+      horario: minutesToTime(t),
+      inicioMin: t,
+      fimMin: t + duration,
+    });
+  }
+
+  return slots;
+}
+
+function blockAppliesToDate(block, dataIso) {
+  const start = toIsoDate(block.dataInicio || block.data);
+  const end = toIsoDate(block.dataFim || block.dataInicio || block.data);
+
+  if (!start) return false;
+  if (!end) return dataIso === start;
+
+  return dataIso >= start && dataIso <= end;
+}
+
+function isFullDayBlock(block) {
+  const tipo = lower(block.tipoBloqueio || block.tipo);
+
+  return tipo === 'dia_inteiro' || tipo === 'periodo';
+}
+
+function slotIsBlocked(slot, blocks) {
+  return blocks.some((block) => {
+    const tipo = lower(block.tipoBloqueio || block.tipo);
+
+    if (tipo !== 'horario') return false;
+
+    const bi = timeToMinutes(block.horaInicio);
+    const bf = timeToMinutes(block.horaFim);
+
+    if (bi === null || bf === null) return false;
+
+    return slot.inicioMin < bf && slot.fimMin > bi;
+  });
+}
+
+async function queryAll(collectionId) {
+  const pageSize = 1000;
+  let skip = 0;
+  let all = [];
+
+  while (true) {
+    const res = await wixData.query(collectionId)
+      .skip(skip)
+      .limit(pageSize)
+      .find(DATA_OPTIONS);
+
+    all = all.concat(res.items);
+
+    if (res.items.length < pageSize) break;
+
+    skip += pageSize;
+
+    // trava de segurança para evitar loop infinito
+    if (skip > 50000) break;
+  }
+
+  return all;
+}
+
+async function getUnidadeAtiva(unidadeSlug) {
+  const slug = lower(unidadeSlug);
+
+  if (!slug) return null;
+
+  const res = await wixData.query(COL.UNIDADES)
+    .eq('slug', slug)
+    .limit(1)
+    .find(DATA_OPTIONS);
+
+  const item = res.items[0];
+
+  if (!item || !isTrue(item.ativo)) return null;
+
+  return {
+    slug: item.slug,
+    nome: item.nome || item.title || item.slug,
+    raw: item,
+  };
+}
+
+async function getRegraDaData(unidadeSlug, dataIso) {
+  const weekday = getWeekdayNumber(dataIso); // 1 segunda até 5 sexta
+
+  if (weekday < 1 || weekday > 5) return null;
+
+  const res = await wixData.query(COL.REGRAS)
+    .eq('unidadeSlug', unidadeSlug)
+    .limit(1000)
+    .find(DATA_OPTIONS);
+
+  return res.items.find((item) => {
+    return isTrue(item.ativo) && Number(item.diaSemanaNumero) === weekday;
+  }) || null;
+}
+
+async function getBloqueiosAplicaveis(unidadeSlug, dataIso) {
+  const res = await wixData.query(COL.BLOQUEIOS)
+    .limit(1000)
+    .find(DATA_OPTIONS);
+
+  return res.items.filter((item) => {
+    if (!isTrue(item.ativo)) return false;
+
+    const unidade = lower(item.unidadeSlug);
+
+    const appliesToUnit =
+      unidade === lower(unidadeSlug) ||
+      unidade === 'todas' ||
+      unidade === 'all';
+
+    if (!appliesToUnit) return false;
+
+    return blockAppliesToDate(item, dataIso);
+  });
+}
+
+async function getAgendamentosAtivos(unidadeSlug, dataIso) {
+  // Busca mais defensiva: evita falha se o Wix importou dataAtendimentoIso como Date
+  // ou se a comparação direta por .eq() não casar string vs data.
+  const items = await queryAll(COL.AGENDAMENTOS);
+
+  return items.filter((item) => {
+    const itemUnidade = lower(getField(item, [
+      'unidadeSlug',
+      'unidadeslug',
+      'unidade_slug',
+      'unidadeId',
+      'unidade',
+    ]));
+
+    const itemDataIso = toIsoDate(getField(item, [
+      'dataAtendimentoIso',
+      'dataAtendimentoISO',
+      'dataatendimentoiso',
+      'dataAtendimento',
+      'data',
+    ]));
+
+    const itemStatus = lower(getField(item, [
+      'status',
+      'statusAgendamento',
+    ]));
+
+    return (
+      itemUnidade === lower(unidadeSlug) &&
+      itemDataIso === dataIso &&
+      itemStatus === 'agendado'
+    );
+  });
+}
+
+function countAgendamentosPorHorario(agendamentos) {
+  const count = {};
+
+  agendamentos.forEach((item) => {
+    const h = text(getField(item, [
+      'horarioInicio',
+      'horario',
+      'horaInicio',
+    ]));
+
+    if (!h) return;
+
+    count[h] = (count[h] || 0) + 1;
+  });
+
+  return count;
+}
+
+export async function listarUnidadesAtivas() {
+  const res = await wixData.query(COL.UNIDADES)
+    .ascending('ordem')
+    .limit(1000)
+    .find(DATA_OPTIONS);
+
+  return res.items
+    .filter((item) => isTrue(item.ativo))
+    .map((item) => ({
+      slug: item.slug,
+      nome: item.nome || item.title || item.slug,
+    }));
+}
+
+export async function listarDatasDisponiveis(unidadeSlug, quantidade = 5) {
+  const unidade = await getUnidadeAtiva(unidadeSlug);
+
+  if (!unidade) {
+    return {
+      ok: false,
+      motivo: 'unidade_inativa',
+      mensagem: 'Unidade indisponível para agendamento.',
+      datas: [],
+    };
+  }
+
+  const datas = [];
+  let cursor = addDaysIso(getNowSaoPauloParts().iso, 1);
+  let tentativas = 0;
+
+  while (datas.length < quantidade && tentativas < 60) {
+    if (isBusinessDay(cursor)) {
+      const horarios = await listarHorariosDisponiveis(unidadeSlug, cursor);
+
+      if (horarios.ok && horarios.horarios.length > 0) {
+        datas.push({
+          dataIso: cursor,
+          label: weekdayLabel(cursor),
+          disponivel: true,
+        });
+      }
+    }
+
+    cursor = addDaysIso(cursor, 1);
+    tentativas += 1;
+  }
+
+  return {
+    ok: true,
+    unidade: {
+      slug: unidade.slug,
+      nome: unidade.nome,
+    },
+    datas,
+  };
+}
+
+export async function listarHorariosDisponiveis(unidadeSlug, dataIsoInput) {
+  const dataIso = toIsoDate(dataIsoInput);
+
+  if (!dataIso) {
+    return {
+      ok: false,
+      motivo: 'data_invalida',
+      mensagem: 'Data inválida.',
+      horarios: [],
+    };
+  }
+
+  const unidade = await getUnidadeAtiva(unidadeSlug);
+
+  if (!unidade) {
+    return {
+      ok: false,
+      motivo: 'unidade_inativa',
+      mensagem: 'Unidade indisponível para agendamento.',
+      horarios: [],
+    };
+  }
+
+  if (!isBusinessDay(dataIso)) {
+    return {
+      ok: false,
+      motivo: 'fim_de_semana',
+      mensagem: 'A data selecionada não é um dia útil.',
+      horarios: [],
+    };
+  }
+
+  if (!isDeadlineOpenForDate(dataIso)) {
+    return {
+      ok: false,
+      motivo: 'prazo_encerrado',
+      mensagem: 'O prazo para agendamento nesta data foi encerrado às 17h.',
+      horarios: [],
+    };
+  }
+
+  const regra = await getRegraDaData(unidadeSlug, dataIso);
+
+  if (!regra) {
+    return {
+      ok: false,
+      motivo: 'sem_regra_agenda',
+      mensagem: 'Não há regra de agenda configurada para esta data.',
+      horarios: [],
+    };
+  }
+
+  const bloqueios = await getBloqueiosAplicaveis(unidadeSlug, dataIso);
+
+  if (bloqueios.some(isFullDayBlock)) {
+    return {
+      ok: false,
+      motivo: 'data_bloqueada',
+      mensagem: 'A data selecionada está bloqueada para agendamento.',
+      horarios: [],
+    };
+  }
+
+  const slots = buildSlotsFromRegra(regra);
+  const agendamentos = await getAgendamentosAtivos(unidadeSlug, dataIso);
+  const ocupacao = countAgendamentosPorHorario(agendamentos);
+  const capacidade = Number(regra.capacidadePorHorario || 1);
+
+  const horarios = slots
+    .filter((slot) => !slotIsBlocked(slot, bloqueios))
+    .filter((slot) => (ocupacao[slot.horario] || 0) < capacidade)
+    .map((slot) => slot.horario);
+
+  return {
+    ok: true,
+    unidade: {
+      slug: unidade.slug,
+      nome: unidade.nome,
+    },
+    dataIso,
+    label: weekdayLabel(dataIso),
+    horarios,
+  };
+}
+
+export async function validarDisponibilidadeFinal(payload) {
+  const unidadeSlug = payload?.unidadeSlug;
+  const dataIso = toIsoDate(payload?.dataIso || payload?.dataAtendimentoIso || payload?.data);
+  const horario = text(payload?.horarioInicio || payload?.horario);
+
+  if (!unidadeSlug || !dataIso || !horario) {
+    return {
+      ok: false,
+      motivo: 'dados_incompletos',
+      mensagem: 'Dados insuficientes para validar o horário.',
+    };
+  }
+
+  const resultado = await listarHorariosDisponiveis(unidadeSlug, dataIso);
+
+  if (!resultado.ok) {
+    return {
+      ok: false,
+      motivo: resultado.motivo,
+      mensagem: resultado.mensagem,
+    };
+  }
+
+  if (!resultado.horarios.includes(horario)) {
+    return {
+      ok: false,
+      motivo: 'horario_indisponivel',
+      mensagem: 'Este horário não está mais disponível. Por favor, escolha outro horário.',
+    };
+  }
+
+  return {
+    ok: true,
+    mensagem: 'Horário disponível.',
+  };
+}
+
+export async function testeMotorDisponibilidade() {
+  const unidades = await listarUnidadesAtivas();
+
+  if (!unidades.length) {
+    return {
+      ok: false,
+      mensagem: 'Nenhuma unidade ativa encontrada.',
+      unidades: [],
+    };
+  }
+
+  const primeiraUnidade = unidades[0];
+  const datas = await listarDatasDisponiveis(primeiraUnidade.slug, 5);
+
+  let horarios = null;
+
+  if (datas.ok && datas.datas.length) {
+    horarios = await listarHorariosDisponiveis(
+      primeiraUnidade.slug,
+      datas.datas[0].dataIso
+    );
+  }
+
+  return {
+    ok: true,
+    unidades,
+    datas,
+    horarios,
+  };
+}
+
+export async function debugAgendamentosImportados() {
+  const items = await queryAll(COL.AGENDAMENTOS);
+
+  return {
+    total: items.length,
+    amostra: items.slice(0, 20).map((item) => ({
+      _id: item._id,
+      title: item.title,
+      unidadeSlug: getField(item, ['unidadeSlug', 'unidadeslug', 'unidade_slug']),
+      dataAtendimentoIso: getField(item, ['dataAtendimentoIso', 'dataAtendimentoISO', 'dataatendimentoiso']),
+      dataAtendimento: getField(item, ['dataAtendimento', 'data']),
+      horarioInicio: getField(item, ['horarioInicio', 'horario', 'horaInicio']),
+      status: getField(item, ['status', 'statusAgendamento']),
+    })),
+  };
+}
