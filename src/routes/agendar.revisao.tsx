@@ -107,6 +107,11 @@ function Page() {
         ))}
       </div>
 
+      <p className="mt-3 border-l-2 border-primary/40 pl-3 text-xs leading-relaxed text-muted-foreground">
+        <span className="font-medium text-foreground">Uso do e-mail:</span>{" "}
+        o endereço informado será compartilhado com a unidade prisional para o envio do link de acesso e comunicações diretamente relacionadas ao atendimento. A OAB/JF também poderá usá-lo para confirmações e avisos sobre este agendamento.
+      </p>
+
       <StepActions
         back={booking.reagendando ? "/agendar/horario" : "/agendar/regras"}
         nextLabel={loading ? "Confirmando..." : "Confirmar agendamento"}

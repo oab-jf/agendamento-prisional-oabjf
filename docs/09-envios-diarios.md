@@ -13,7 +13,9 @@ Enviar automaticamente para cada unidade prisional a lista de atendimentos do pr
 - somente agendamentos com status `agendado` entram;
 - cancelados e registros originais reagendados não entram;
 - unidades inativas ou com `receberListaDiaria === false` não recebem;
-- cada unidade precisa ter `emailListas` ou `emailRecebimentoListas` válido.
+- cada unidade precisa ter `emailListas` ou `emailRecebimentoListas` válido;
+- cada atendimento da lista deve trazer o e-mail do advogado para o envio do
+  link de acesso pela unidade prisional.
 
 ## Agendamento no Wix
 
@@ -65,6 +67,43 @@ O envio automático usa uma chave baseada em unidade, data-alvo e conteúdo. Uma
 
 Quando o conteúdo muda, um novo envio pode ocorrer com o assunto identificado como **Lista atualizada**.
 
+## E-mail do advogado e finalidade operacional
+
+A lista diária inclui, para cada atendimento:
+
+- nome do advogado;
+- OAB;
+- **e-mail para envio do link**;
+- IPL;
+- INFOPEN;
+- protocolo.
+
+O endereço deve aparecer tanto no HTML quanto na versão de texto e, no HTML,
+permanece visível e clicável por `mailto:`.
+
+A unidade deve usar esse e-mail para o envio do link de acesso e para
+comunicações diretamente relacionadas ao atendimento. O cadastro público deve
+informar essa finalidade no momento em que o advogado preenche o campo e repeti-la
+na revisão antes da confirmação.
+
+Registros sem e-mail válido são explicitamente sinalizados como
+`E-mail não informado`; a lista inteira não deve ser bloqueada por um único
+registro inconsistente.
+
+### Reenvio retroativo da correção de 12/08/2026
+
+Para a regularização das listas já enviadas sem os e-mails, foi criado o motivo
+controlado:
+
+`incluir_emails_advogados`
+
+Nessa situação específica, o assunto passa a ser:
+
+`Lista atualizada com e-mails para envio dos links — [Unidade] — [Data]`
+
+e o corpo explica que a mensagem substitui a lista anterior porque o reenvio
+inclui os e-mails necessários ao envio dos links.
+
 ## Lista vazia
 
 A ausência de agendamentos não é tratada como erro. A unidade recebe uma mensagem informando que não há atendimentos agendados para a data.
@@ -98,3 +137,10 @@ O módulo reutiliza os secrets da integração Infobip. A documentação deve re
 - `INFOBIP_API_KEY`
 - `INFOBIP_FROM_EMAIL`
 - `INFOBIP_FROM_NAME`
+
+## Pendência de design antes do encerramento do projeto
+
+Antes da conclusão do ecossistema OAB/JF, os templates transacionais do Site,
+Central e Portal devem passar por uma revisão transversal de identidade:
+estrutura base única, tipografia, cores, cabeçalho, rodapé, componentes de
+alerta, responsividade, linguagem e assinatura institucional consistentes.

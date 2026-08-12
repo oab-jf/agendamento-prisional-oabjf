@@ -15,6 +15,7 @@ const TIMEZONE = 'America/Sao_Paulo';
 const HORARIO_BRASILIA = '17:00';
 const INFOBIP_EMAIL_ENDPOINT = '/email/3/send';
 const MAX_RESULTS = 250;
+const MOTIVO_ATUALIZACAO_EMAILS = 'incluir_emails_advogados';
 
 /**
  * Job principal: executado diariamente às 20:00 UTC (17:00 em Brasília).
@@ -200,6 +201,9 @@ export async function executarEnvioListasAgoraCore(payload = {}, solicitadoPor =
 
 export async function reenviarListaCore(payload = {}, solicitadoPor = '') {
   const envioId = text(payload.envioId || payload._id || payload.id);
+  const motivoAtualizacao = normalizarMotivoAtualizacao(
+    payload.motivoAtualizacao || payload.motivo || payload.contextoAtualizacao,
+  );
 
   if (!envioId) {
     return { ok: false, codigo: 'ID_OBRIGATORIO', mensagem: 'Envio não identificado.' };
@@ -227,6 +231,7 @@ export async function reenviarListaCore(payload = {}, solicitadoPor = '') {
     modo: 'manual',
     solicitadoPor: text(solicitadoPor) || 'painel-admin',
     origem: `reenvio:${envioId}`,
+    motivoAtualizacao,
     forcar: true,
   });
 }
@@ -325,6 +330,7 @@ async function enviarListaParaUnidade({
   emailOverride = '',
   solicitadoPor = '',
   origem = '',
+  motivoAtualizacao = '',
   forcar = false,
 }) {
   const dataLabel = formatDateBr(dataAlvoIso);
@@ -336,6 +342,7 @@ async function enviarListaParaUnidade({
     horarioFim: text(item.horarioFim),
     nomeAdvogado: text(item.nomeAdvogado),
     numeroOab: text(item.numeroOab),
+    emailAdvogado: obterEmailAdvogado(item),
     nomeIpl: text(item.nomeIpl),
     infopen: text(item.infopen),
   })));
@@ -368,7 +375,10 @@ async function enviarListaParaUnidade({
   const listaAtualizada =
     (modo === 'automatico' && envioAutomaticoAnterior && envioAutomaticoAnterior.conteudoHash !== conteudoHash)
     || (modo === 'manual' && text(origem).startsWith('reenvio:'));
-  const assuntoBase = `${listaAtualizada ? 'Lista atualizada' : 'Lista de atendimentos'} — ${unidade.nome} — ${dataLabel}`;
+  const atualizacaoEmails = motivoAtualizacao === MOTIVO_ATUALIZACAO_EMAILS;
+  const assuntoBase = atualizacaoEmails
+    ? `Lista atualizada com e-mails para envio dos links — ${unidade.nome} — ${dataLabel}`
+    : `${listaAtualizada ? 'Lista atualizada' : 'Lista de atendimentos'} — ${unidade.nome} — ${dataLabel}`;
   const assunto = modo === 'teste' ? `[TESTE] ${assuntoBase}` : assuntoBase;
   const agora = new Date();
   const tentativas = Number(registroExistente?.tentativas || 0) + 1;
@@ -425,6 +435,7 @@ async function enviarListaParaUnidade({
     dataLabel,
     agendamentos,
     modo,
+    motivoAtualizacao,
   });
 
   let config;
@@ -612,16 +623,37 @@ async function estaBloqueadoGlobalmenteDiaInteiro(dataIso) {
   }
 }
 
-function montarEmailLista({ unidade, dataAlvoIso, dataLabel, agendamentos, modo }) {
+function montarEmailLista({
+  unidade,
+  dataAlvoIso,
+  dataLabel,
+  agendamentos,
+  modo,
+  motivoAtualizacao = '',
+}) {
   const total = agendamentos.length;
+  const totalSemEmail = agendamentos.filter((item) => !obterEmailAdvogado(item)).length;
+  const avisoSemEmailTexto = totalSemEmail
+    ? `ATENÇÃO: ${totalSemEmail} ${totalSemEmail === 1 ? 'agendamento está' : 'agendamentos estão'} sem e-mail válido para envio do link.`
+    : '';
+  const atualizacaoEmails = motivoAtualizacao === MOTIVO_ATUALIZACAO_EMAILS;
+  const contextoAtualizacaoTexto = atualizacaoEmails
+    ? 'ATUALIZAÇÃO: esta mensagem substitui a lista enviada anteriormente. O reenvio está sendo realizado para incluir os e-mails dos(as) advogados(as), necessários ao envio dos links de acesso aos atendimentos.'
+    : '';
+
   const linhasTexto = agendamentos.length
-    ? agendamentos.map((item) => [
-        `${formatarHorario(item)} — ${text(item.nomeAdvogado)}`,
-        `OAB: ${text(item.numeroOab) || '—'}`,
-        `IPL: ${text(item.nomeIpl) || '—'}`,
-        `INFOPEN: ${text(item.infopen) || '—'}`,
-        `Protocolo: ${text(item.protocolo) || '—'}`,
-      ].join(' | '))
+    ? agendamentos.map((item) => {
+        const emailAdvogado = obterEmailAdvogado(item);
+
+        return [
+          `${formatarHorario(item)} — ${text(item.nomeAdvogado)}`,
+          `OAB: ${text(item.numeroOab) || '—'}`,
+          `E-mail para envio do link: ${emailAdvogado || 'E-mail não informado'}`,
+          `IPL: ${text(item.nomeIpl) || '—'}`,
+          `INFOPEN: ${text(item.infopen) || '—'}`,
+          `Protocolo: ${text(item.protocolo) || '—'}`,
+        ].join(' | ');
+      })
     : ['Não há atendimentos agendados para esta data.'];
 
   const textBody = [
@@ -632,21 +664,46 @@ function montarEmailLista({ unidade, dataAlvoIso, dataLabel, agendamentos, modo 
     `Data dos atendimentos: ${dataLabel}`,
     `Total de agendamentos: ${total}`,
     '',
+    contextoAtualizacaoTexto,
+    '',
+    'Utilize o e-mail informado exclusivamente para o envio do link e para comunicações diretamente relacionadas a este atendimento.',
+    avisoSemEmailTexto,
+    '',
     ...linhasTexto,
     '',
     'Esta lista considera apenas agendamentos com status Agendado no momento do envio.',
     'Cancelamentos ou remarcações posteriores exigem o reenvio de uma lista atualizada.',
   ].filter(Boolean).join('\n');
 
-  const rows = agendamentos.map((item) => `
+  const rows = agendamentos.map((item) => {
+    const emailAdvogado = obterEmailAdvogado(item);
+    const emailHtml = emailAdvogado
+      ? `<a href="mailto:${escapeHtml(emailAdvogado)}" style="color:#274c77;text-decoration:underline">${escapeHtml(emailAdvogado)}</a>`
+      : '<strong style="color:#9f2d2d">E-mail não informado</strong>';
+
+    return `
     <tr>
       <td style="padding:10px 8px;border-bottom:1px solid #ddd3c5;white-space:nowrap">${escapeHtml(formatarHorario(item))}</td>
       <td style="padding:10px 8px;border-bottom:1px solid #ddd3c5">${escapeHtml(text(item.nomeAdvogado) || '—')}</td>
       <td style="padding:10px 8px;border-bottom:1px solid #ddd3c5;white-space:nowrap">${escapeHtml(text(item.numeroOab) || '—')}</td>
+      <td style="padding:10px 8px;border-bottom:1px solid #ddd3c5">${emailHtml}</td>
       <td style="padding:10px 8px;border-bottom:1px solid #ddd3c5">${escapeHtml(text(item.nomeIpl) || '—')}</td>
       <td style="padding:10px 8px;border-bottom:1px solid #ddd3c5;white-space:nowrap">${escapeHtml(text(item.infopen) || '—')}</td>
       <td style="padding:10px 8px;border-bottom:1px solid #ddd3c5;white-space:nowrap;font-family:monospace">${escapeHtml(text(item.protocolo) || '—')}</td>
-    </tr>`).join('');
+    </tr>`;
+  }).join('');
+
+  const contextoAtualizacaoHtml = atualizacaoEmails
+    ? `<div style="margin-top:16px;padding:14px 16px;border:1px solid #b8a98f;background:#f1eadf;color:#3f372e;font-size:13px">
+        <strong>Atualização da lista:</strong> esta mensagem substitui a lista enviada anteriormente. O reenvio está sendo realizado para incluir os e-mails dos(as) advogados(as), necessários ao envio dos links de acesso aos atendimentos.
+      </div>`
+    : '';
+
+  const alertaSemEmailHtml = totalSemEmail
+    ? `<div style="margin-top:16px;padding:12px 14px;border:1px solid #d7aaa5;background:#f7e9e7;color:#6f2525;font-size:12px">
+        <strong>Atenção:</strong> ${totalSemEmail} ${totalSemEmail === 1 ? 'agendamento está' : 'agendamentos estão'} sem e-mail válido para envio do link.
+      </div>`
+    : '';
 
   const tabela = total
     ? `<div style="overflow-x:auto"><table role="presentation" style="width:100%;border-collapse:collapse;margin-top:18px;font-size:13px">
@@ -655,6 +712,7 @@ function montarEmailLista({ unidade, dataAlvoIso, dataLabel, agendamentos, modo 
             <th style="padding:10px 8px;border-bottom:1px solid #c9bdad">Horário</th>
             <th style="padding:10px 8px;border-bottom:1px solid #c9bdad">Advogado(a)</th>
             <th style="padding:10px 8px;border-bottom:1px solid #c9bdad">OAB</th>
+            <th style="padding:10px 8px;border-bottom:1px solid #c9bdad">E-mail para envio do link</th>
             <th style="padding:10px 8px;border-bottom:1px solid #c9bdad">IPL</th>
             <th style="padding:10px 8px;border-bottom:1px solid #c9bdad">INFOPEN</th>
             <th style="padding:10px 8px;border-bottom:1px solid #c9bdad">Protocolo</th>
@@ -669,7 +727,7 @@ function montarEmailLista({ unidade, dataAlvoIso, dataLabel, agendamentos, modo 
   const htmlBody = `<!doctype html>
   <html lang="pt-BR">
     <body style="margin:0;background:#f3eee6;padding:24px 12px;font-family:Arial,sans-serif;color:#2f2a24;line-height:1.5">
-      <div style="max-width:920px;margin:0 auto;background:#fffdf8;border:1px solid #d8cdbf;border-radius:8px;overflow:hidden">
+      <div style="max-width:1040px;margin:0 auto;background:#fffdf8;border:1px solid #d8cdbf;border-radius:8px;overflow:hidden">
         <div style="display:flex;height:4px">
           <div style="width:25%;background:#9f2d2d"></div><div style="width:50%;background:#f7f2e9"></div><div style="width:25%;background:#274c77"></div>
         </div>
@@ -683,6 +741,11 @@ function montarEmailLista({ unidade, dataAlvoIso, dataLabel, agendamentos, modo 
             <div><strong>Data dos atendimentos:</strong> ${escapeHtml(dataLabel)}</div>
             <div><strong>Total de agendamentos:</strong> ${total}</div>
           </div>
+          ${contextoAtualizacaoHtml}
+          <div style="margin-top:16px;padding:12px 14px;border:1px solid #c9bdad;background:#fffaf2;color:#4f473e;font-size:12px">
+            <strong>Orientação operacional:</strong> utilize o e-mail informado exclusivamente para o envio do link e para comunicações diretamente relacionadas a este atendimento.
+          </div>
+          ${alertaSemEmailHtml}
           ${tabela}
           <p style="margin:18px 0 0;font-size:12px;color:#756b5e">
             Esta lista considera apenas agendamentos com status <strong>Agendado</strong> no momento do envio.
@@ -703,6 +766,17 @@ function formatarHorario(item = {}) {
   const inicio = text(item.horarioInicio);
   const fim = text(item.horarioFim);
   return inicio && fim ? `${inicio}–${fim}` : inicio || '—';
+}
+
+function obterEmailAdvogado(item = {}) {
+  const email = normalizeEmail(item.emailAdvogado || item.emailIndex);
+  return isValidEmail(email) ? email : '';
+}
+
+function normalizarMotivoAtualizacao(value) {
+  return text(value) === MOTIVO_ATUALIZACAO_EMAILS
+    ? MOTIVO_ATUALIZACAO_EMAILS
+    : '';
 }
 
 async function buscarEnvioAutomatico(unidadeSlug, dataIso) {

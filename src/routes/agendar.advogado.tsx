@@ -73,7 +73,17 @@ function Page() {
           />
         </div>
         <OabField value={advOab} onChange={setAdvOab} hint="Informe a UF e o número de inscrição." required error={show(errs.oab)} />
-        <Field label="E-mail" required type="email" value={advEmail} onChange={setAdvEmail} placeholder="seu.email@exemplo.com" error={show(errs.email)} autoComplete="email" />
+        <Field
+          label="E-mail"
+          required
+          type="email"
+          value={advEmail}
+          onChange={setAdvEmail}
+          placeholder="seu.email@exemplo.com"
+          error={show(errs.email)}
+          autoComplete="email"
+          hint="Este e-mail será compartilhado com a unidade prisional para o envio do link de acesso e comunicações diretamente relacionadas ao atendimento. A OAB/JF também poderá usá-lo para confirmações e avisos sobre este agendamento."
+        />
         <Field label="Telefone" required type="tel" value={advTelefone} onChange={setAdvTelefone} placeholder="(32) 99999-0000" mask="phone" error={show(errs.tel)} autoComplete="tel" />
       </div>
       <StepActions back="/agendar/horario" onNext={continuar} />
