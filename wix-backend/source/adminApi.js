@@ -46,7 +46,7 @@ const ADMIN_INVITE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const INFOBIP_EMAIL_ENDPOINT = '/email/3/send';
 const CENTRAL_PUBLIC_URL = 'https://central.juizdefora-oabmg.org.br';
 const LEGACY_ADMIN_ID = 'legacy-secret-admin';
-const AGENDAMENTOS_SHADOW_READ_ENABLED = false;
+const AGENDAMENTOS_SHADOW_READ_ENABLED = true;
 
 const ADMIN_PERMISSIONS = {
   AGENDAMENTOS_VER: 'agendamentos.ver',

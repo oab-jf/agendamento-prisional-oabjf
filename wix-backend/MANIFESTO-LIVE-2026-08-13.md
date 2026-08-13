@@ -68,3 +68,48 @@ Nesta fase:
 - nenhum índice foi alterado;
 - nenhuma escrita schema v2 foi ativada;
 - nenhum comportamento público de agendamento foi alterado.
+
+## Fase 1F — observação automática
+
+Após o checkpoint `60a9905`, o shadow read foi ativado automaticamente para
+consultas administrativas suportadas.
+
+Alteração live:
+
+- `adminApi.js` — `581f7c33183097394a0b2f6d313e83b679aeb715a61353ddf665b2c9d78232ab`
+
+Permanecem inalterados:
+
+- `http-functions.js` — `be4033eebe3f07238901b09e861e9a7c152278a8b3f22b7d563f4455e12bd54b`;
+- bridge administrativo;
+- módulos do repositório e shadow read;
+- coleções e índices.
+
+A constante passou a:
+
+`AGENDAMENTOS_SHADOW_READ_ENABLED = true`
+
+### Garantias preservadas
+
+- a resposta oficial continua sendo a leitura legada;
+- `shadowRead` não é exposto em requisições normais;
+- o candidato é somente leitura;
+- falhas do candidato permanecem não bloqueantes;
+- `shadowDebug=1` continua reservado ao diagnóstico administrativo;
+- nenhuma escrita schema v2 foi ativada.
+
+### Smoke live da observação automática
+
+Executado em 13/08/2026:
+
+- contrato normal inicial: `total=15`, `itens=15`;
+- contrato normal final: `total=15`, `itens=15`;
+- `shadowRead` exposto em requests normais: não;
+- probes de controle: `9`;
+- comparações concluídas: `9`;
+- paridade: `9`;
+- divergências: `0`;
+- erros: `0`.
+
+A observação automática pode permanecer ligada enquanto o desenvolvimento
+multimodal prossegue, sem promover o candidato a fonte oficial.
