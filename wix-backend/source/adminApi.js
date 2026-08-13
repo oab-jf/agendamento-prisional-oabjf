@@ -229,6 +229,9 @@ export async function listarAgendamentosAdminApi(filtros = {}, tokenRecebido = '
     );
 
     const busca = normalizeSearch(filtros.busca || filtros.q || filtros.search);
+    const shadowDebug = ['1', 'true', 'on', 'enabled'].includes(
+      text(filtros.shadowDebug).toLowerCase()
+    );
 
     let query = wixData
       .query(COL.AGENDAMENTOS)
@@ -249,11 +252,11 @@ export async function listarAgendamentosAdminApi(filtros = {}, tokenRecebido = '
 
     const result = await query.find({ suppressAuth: true });
 
-    await observeAdminAppointmentsShadowRead({
+    const shadowReadReport = await observeAdminAppointmentsShadowRead({
       wixData,
       rawResult: result,
       filtros,
-      enabled: AGENDAMENTOS_SHADOW_READ_ENABLED,
+      enabled: AGENDAMENTOS_SHADOW_READ_ENABLED || shadowDebug,
       logger: (report) => console.info('agendamentos.shadow-read', report),
     });
 
@@ -269,6 +272,7 @@ export async function listarAgendamentosAdminApi(filtros = {}, tokenRecebido = '
       ok: true,
       total: agendamentos.length,
       agendamentos,
+      ...(shadowDebug ? { shadowRead: shadowReadReport } : {}),
     };
   } catch (err) {
     console.error('Erro em listarAgendamentosAdminApi:', err);

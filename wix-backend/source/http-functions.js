@@ -9496,6 +9496,7 @@ export async function use_oabAdminAgendamentos(request) {
         'dataAtendimentoIso',
       ]),
       busca: getQueryParam(request, ['busca', 'q', 'search']),
+      shadowDebug: getQueryParam(request, ['shadowDebug']),
     };
 
     const resultado = await listarAgendamentosAdminApi(filtros, token);
