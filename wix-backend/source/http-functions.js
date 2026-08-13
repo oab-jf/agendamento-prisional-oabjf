@@ -49,6 +49,9 @@ import {
   testarEnvioListaAdminApi,
   executarEnvioListasAdminApi,
   reenviarListaAdminApi,
+  obterCatalogoAgendamentosAdminApi,
+  salvarCatalogoAgendamentosAdminApi,
+  obterCatalogoAgendamentosPublicoApi,
 } from 'backend/adminApi';
 
 import { confirmarSolicitacaoDocumento } from 'backend/documentos';
@@ -7171,6 +7174,40 @@ export async function use_oabContato(request) {
   }
 }
 
+export async function use_oabAgendamentoCatalogo(request) {
+  try {
+    if (isOptions(request)) {
+      return jsonOk(request, { ok: true, method: 'OPTIONS' });
+    }
+
+    if (!isGet(request)) {
+      return jsonBadRequest(request, {
+        ok: false,
+        mensagem: 'Método não permitido para este endpoint.',
+      });
+    }
+
+    const resultado = await obterCatalogoAgendamentosPublicoApi();
+
+    if (resultado.ok) return jsonOk(request, resultado);
+
+    if (resultado.codigo === 'CATALOGO_COLECAO_AUSENTE') {
+      return jsonServerError(request, resultado);
+    }
+
+    return jsonServerError(request, resultado);
+  } catch (err) {
+    console.error('Erro no endpoint oabAgendamentoCatalogo:', err);
+
+    return jsonServerError(request, {
+      ok: false,
+      codigo: 'ERRO_INTERNO',
+      mensagem: 'Não foi possível carregar as modalidades de agendamento.',
+    });
+  }
+}
+
+
 export async function use_oabUnidades(request) {
   try {
     if (isOptions(request)) {
@@ -9468,6 +9505,59 @@ export async function use_oabAdminLogin(request) {
     });
   }
 }
+
+export async function use_oabAdminAgendamentoCatalogo(request) {
+  try {
+    if (isOptions(request)) {
+      return jsonOk(request, { ok: true, method: 'OPTIONS' });
+    }
+
+    const token = getAdminTokenFromRequest(request);
+    let resultado;
+
+    if (isGet(request)) {
+      resultado = await obterCatalogoAgendamentosAdminApi(token);
+    } else if (isPost(request)) {
+      const payload = await readJsonBody(request);
+      resultado = await salvarCatalogoAgendamentosAdminApi(payload, token);
+    } else {
+      return jsonBadRequest(request, {
+        ok: false,
+        mensagem: 'Método não permitido para este endpoint.',
+      });
+    }
+
+    if (resultado.ok) return jsonOk(request, resultado);
+
+    if (
+      resultado.codigo === 'ADMIN_NAO_AUTORIZADO' ||
+      resultado.codigo === 'SESSAO_EXPIRADA' ||
+      resultado.codigo === 'SEM_PERMISSAO' ||
+      resultado.codigo === 'CATALOGO_REVISAO_DIVERGENTE' ||
+      resultado.codigo === 'CATALOGO_OBRIGATORIO' ||
+      resultado.codigo === 'OFERTA_NAO_PRONTA' ||
+      resultado.codigo === 'MODALIDADE_NAO_PRONTA' ||
+      resultado.codigo?.endsWith('_OBRIGATORIOS') ||
+      resultado.codigo?.endsWith('_INEXISTENTE') ||
+      resultado.codigo === 'OFERTA_RECURSO_LOCAL_DIVERGENTE' ||
+      resultado.codigo === 'CATALOGO_ID_INVALIDO' ||
+      resultado.codigo === 'CATALOGO_ID_DUPLICADO'
+    ) {
+      return jsonBadRequest(request, resultado);
+    }
+
+    return jsonServerError(request, resultado);
+  } catch (err) {
+    console.error('Erro no endpoint oabAdminAgendamentoCatalogo:', err);
+
+    return jsonServerError(request, {
+      ok: false,
+      codigo: 'ERRO_INTERNO',
+      mensagem: 'Não foi possível processar a configuração de agendamentos.',
+    });
+  }
+}
+
 
 export async function use_oabAdminAgendamentos(request) {
   try {

@@ -11,6 +11,45 @@
 
 const API_BASE = "https://www.juizdefora-oabmg.org.br/_functions";
 
+const CACHE_CATALOGO_MS = 2 * 60 * 1000;
+
+export type PublicAppointmentOffer = {
+  id: string;
+  name: string;
+  description: string;
+  bookingPath: string;
+  durationMinutes: number;
+  capacity: number;
+  location: {
+    id: string;
+    name: string;
+    address: string;
+    kind: string;
+  } | null;
+  resource: {
+    id: string;
+    name: string;
+    kind: string;
+  } | null;
+  order: number;
+};
+
+export type PublicAppointmentModality = {
+  id: string;
+  familyId: string;
+  template: string;
+  publicName: string;
+  description: string;
+  offers: PublicAppointmentOffer[];
+  order: number;
+};
+
+export type PublicAppointmentCatalog = {
+  schemaVersion: number;
+  revision: number;
+  modalities: PublicAppointmentModality[];
+};
+
 const CACHE_UNIDADES_MS = 5 * 60 * 1000;
 const CACHE_DATAS_MS = 2 * 60 * 1000;
 const CACHE_HORARIOS_MS = 45 * 1000;
@@ -42,6 +81,25 @@ async function cached<T>(key: string, ttlMs: number, loader: () => Promise<T>): 
     memoryCache.set(key, { value, expiresAt: Date.now() + ttlMs });
   }
   return value;
+}
+
+export async function listarCatalogoAgendamentos(): Promise<PublicAppointmentCatalog> {
+  return cached("catalogo-agendamentos-publico", CACHE_CATALOGO_MS, async () => {
+    const response = await fetch(`${API_BASE}/oabAgendamentoCatalogo`, {
+      method: "GET",
+      headers: { Accept: "application/json" },
+    });
+
+    const raw = (await response.json().catch(() => null)) as
+      | { ok?: boolean; catalogo?: PublicAppointmentCatalog; mensagem?: string }
+      | null;
+
+    if (!response.ok || !raw?.ok || !raw.catalogo) {
+      throw new Error(raw?.mensagem || "Não foi possível carregar as modalidades de agendamento.");
+    }
+
+    return raw.catalogo;
+  });
 }
 
 export type ApiOk<T> = { ok: true } & T;

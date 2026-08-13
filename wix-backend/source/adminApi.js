@@ -19,6 +19,12 @@ import {
   observeAdminAppointmentsShadowRead,
 } from 'backend/agendamentosAdminShadowBridge';
 
+import {
+  obterCatalogoAgendamentosAdminCore,
+  salvarCatalogoAgendamentosAdminCore,
+  obterCatalogoAgendamentosPublicoCore,
+} from 'backend/agendamentosConfiguracaoStore';
+
 const COL = {
   UNIDADES: 'Import4258',
   AGENDAMENTOS: 'Import4259',
@@ -52,6 +58,7 @@ const ADMIN_PERMISSIONS = {
   AGENDAMENTOS_VER: 'agendamentos.ver',
   AGENDAMENTOS_CANCELAR: 'agendamentos.cancelar',
   AGENDAMENTOS_REMARCAR: 'agendamentos.remarcar',
+  AGENDAMENTOS_CONFIGURAR: 'agendamentos.configurar',
 
   DOCUMENTOS_VER: 'documentos.ver',
   DOCUMENTOS_ABRIR: 'documentos.abrir',
@@ -82,7 +89,7 @@ const ADMIN_PERMISSIONS = {
 };
 
 const ALL_ADMIN_PERMISSIONS = Object.keys(ADMIN_PERMISSIONS).map((key) => ADMIN_PERMISSIONS[key]);
-const ADMIN_PERMISSIONS_SCHEMA_VERSION = 2;
+const ADMIN_PERMISSIONS_SCHEMA_VERSION = 3;
 const USUARIOS_CRITICOS_PERMISSAO = ADMIN_PERMISSIONS.USUARIOS_EDITAR;
 
 export async function loginAdminApi(payload = {}) {
@@ -285,6 +292,137 @@ export async function listarAgendamentosAdminApi(filtros = {}, tokenRecebido = '
   }
 }
 
+
+
+export async function obterCatalogoAgendamentosAdminApi(tokenRecebido = '') {
+  try {
+    const tokenOk = await validarAdminToken(
+      tokenRecebido,
+      ADMIN_PERMISSIONS.AGENDAMENTOS_CONFIGURAR
+    );
+
+    if (!tokenOk.ok) return tokenOk;
+
+    const resultado = await obterCatalogoAgendamentosAdminCore();
+
+    return {
+      ok: true,
+      ...resultado,
+    };
+  } catch (err) {
+    console.error('Erro em obterCatalogoAgendamentosAdminApi:', err);
+
+    return catalogoAgendamentosErrorResult(
+      err,
+      'Não foi possível carregar a configuração de agendamentos.'
+    );
+  }
+}
+
+export async function salvarCatalogoAgendamentosAdminApi(payload = {}, tokenRecebido = '') {
+  try {
+    const tokenOk = await validarAdminToken(
+      tokenRecebido,
+      ADMIN_PERMISSIONS.AGENDAMENTOS_CONFIGURAR
+    );
+
+    if (!tokenOk.ok) return tokenOk;
+
+    const catalog = payload.catalog || payload.catalogo;
+    const expectedRevision = payload.expectedRevision ?? payload.revisionEsperada;
+
+    if (!catalog || typeof catalog !== 'object') {
+      return {
+        ok: false,
+        codigo: 'CATALOGO_OBRIGATORIO',
+        mensagem: 'Envie a configuração completa de agendamentos para salvar.',
+      };
+    }
+
+    const updatedBy = normalizeEmail(tokenOk?.usuario?.email) || 'administracao';
+    const resultado = await salvarCatalogoAgendamentosAdminCore({
+      catalog,
+      expectedRevision,
+      updatedBy,
+    });
+
+    await registrarAdminLog(
+      tokenOk,
+      'agendamentos.configuracao.salvar',
+      'AgendamentoConfiguracoes',
+      'catalogo-principal',
+      {
+        revision: resultado?.catalog?.revision,
+        modalidades: resultado?.catalog?.modalities?.length || 0,
+        locais: resultado?.catalog?.locations?.length || 0,
+        recursos: resultado?.catalog?.resources?.length || 0,
+        ofertas: resultado?.catalog?.offers?.length || 0,
+      }
+    );
+
+    return {
+      ok: true,
+      mensagem: 'Configuração de agendamentos salva com sucesso.',
+      ...resultado,
+    };
+  } catch (err) {
+    console.error('Erro em salvarCatalogoAgendamentosAdminApi:', err);
+
+    return catalogoAgendamentosErrorResult(
+      err,
+      'Não foi possível salvar a configuração de agendamentos.'
+    );
+  }
+}
+
+export async function obterCatalogoAgendamentosPublicoApi() {
+  try {
+    const catalogo = await obterCatalogoAgendamentosPublicoCore();
+
+    return {
+      ok: true,
+      catalogo,
+    };
+  } catch (err) {
+    console.error('Erro em obterCatalogoAgendamentosPublicoApi:', err);
+
+    return catalogoAgendamentosErrorResult(
+      err,
+      'Não foi possível carregar as modalidades de agendamento.'
+    );
+  }
+}
+
+function catalogoAgendamentosErrorResult(err, fallbackMessage) {
+  const code = text(err?.code) || 'ERRO_INTERNO';
+  const known = new Set([
+    'CATALOGO_COLECAO_AUSENTE',
+    'CATALOGO_ARQUIVO_INVALIDO',
+    'CATALOGO_REVISAO_DIVERGENTE',
+    'CATALOGO_ID_INVALIDO',
+    'CATALOGO_ID_DUPLICADO',
+    'MODALIDADE_DADOS_OBRIGATORIOS',
+    'LOCAL_DADOS_OBRIGATORIOS',
+    'RECURSO_DADOS_OBRIGATORIOS',
+    'OFERTA_DADOS_OBRIGATORIOS',
+    'RECURSO_LOCAL_INEXISTENTE',
+    'OFERTA_MODALIDADE_INEXISTENTE',
+    'OFERTA_LOCAL_INEXISTENTE',
+    'OFERTA_RECURSO_INEXISTENTE',
+    'OFERTA_RECURSO_LOCAL_DIVERGENTE',
+    'OFERTA_NAO_PRONTA',
+    'MODALIDADE_NAO_PRONTA',
+  ]);
+
+  return {
+    ok: false,
+    codigo: known.has(code) ? code : 'ERRO_INTERNO',
+    mensagem: known.has(code) && text(err?.message)
+      ? text(err.message)
+      : fallbackMessage,
+    detalhes: known.has(code) && err?.details ? err.details : undefined,
+  };
+}
 
 
 export async function meAdminApi(tokenRecebido = '') {
@@ -3920,6 +4058,10 @@ function aplicarDependenciasPermissoes(permissoes = []) {
     next.add(ADMIN_PERMISSIONS.FORMULARIOS_VER);
   }
 
+  if (next.has(ADMIN_PERMISSIONS.AGENDAMENTOS_CONFIGURAR)) {
+    next.add(ADMIN_PERMISSIONS.AGENDAMENTOS_VER);
+  }
+
   return Array.from(next).sort();
 }
 
@@ -3939,36 +4081,48 @@ function normalizarPermissoes(value) {
 function normalizarPermissoesArmazenadas(value) {
   const { raw, version } = extrairPermissoesBrutas(value);
   const permissoes = normalizarPermissoes(raw);
-
-  if (version >= ADMIN_PERMISSIONS_SCHEMA_VERSION) {
-    return permissoes;
-  }
-
   const next = new Set(permissoes);
-  const possuiaAcessoLegadoAFormularios =
-    next.has(ADMIN_PERMISSIONS.FORMULARIOS_VER) ||
-    next.has(ADMIN_PERMISSIONS.USUARIOS_VER);
 
-  if (!possuiaAcessoLegadoAFormularios) {
-    return permissoes;
+  if (version < 2) {
+    const possuiaAcessoLegadoAFormularios =
+      next.has(ADMIN_PERMISSIONS.FORMULARIOS_VER) ||
+      next.has(ADMIN_PERMISSIONS.USUARIOS_VER);
+
+    if (possuiaAcessoLegadoAFormularios) {
+      next.add(ADMIN_PERMISSIONS.FORMULARIOS_VER);
+
+      const perfilDedicadoLegado =
+        permissoes.length === 1 &&
+        permissoes[0] === ADMIN_PERMISSIONS.FORMULARIOS_VER;
+      const possuiaPermissaoOperacional = permissoes.some((permissao) =>
+        permissao !== ADMIN_PERMISSIONS.FORMULARIOS_VER &&
+        !permissao.endsWith('.ver')
+      );
+
+      if (perfilDedicadoLegado || possuiaPermissaoOperacional) {
+        next.add(ADMIN_PERMISSIONS.FORMULARIOS_OPERAR);
+        next.add(ADMIN_PERMISSIONS.FORMULARIOS_ANEXOS);
+      }
+    }
   }
 
-  next.add(ADMIN_PERMISSIONS.FORMULARIOS_VER);
+  if (version < 3) {
+    const possuiaGestaoEstruturalAgendamentos = [
+      ADMIN_PERMISSIONS.AGENDAMENTOS_CANCELAR,
+      ADMIN_PERMISSIONS.AGENDAMENTOS_REMARCAR,
+      ADMIN_PERMISSIONS.UNIDADES_CRIAR,
+      ADMIN_PERMISSIONS.UNIDADES_EDITAR,
+      ADMIN_PERMISSIONS.UNIDADES_ATIVAR,
+      ADMIN_PERMISSIONS.BLOQUEIOS_CRIAR,
+      ADMIN_PERMISSIONS.BLOQUEIOS_EDITAR,
+      ADMIN_PERMISSIONS.BLOQUEIOS_REMOVER,
+      ADMIN_PERMISSIONS.CONFIG_ATIVAR_ENVIOS,
+      ADMIN_PERMISSIONS.USUARIOS_EDITAR,
+    ].some((permissao) => next.has(permissao));
 
-  const perfilDedicadoLegado =
-    permissoes.length === 1 &&
-    permissoes[0] === ADMIN_PERMISSIONS.FORMULARIOS_VER;
-  const possuiaPermissaoOperacional = permissoes.some((permissao) =>
-    permissao !== ADMIN_PERMISSIONS.FORMULARIOS_VER &&
-    !permissao.endsWith('.ver')
-  );
-
-  // Perfis antigos estritamente de consulta continuam somente leitura.
-  // Perfis administrativos/operacionais e o antigo perfil dedicado de
-  // Formulários mantêm o nível de acesso que possuíam antes da separação.
-  if (perfilDedicadoLegado || possuiaPermissaoOperacional) {
-    next.add(ADMIN_PERMISSIONS.FORMULARIOS_OPERAR);
-    next.add(ADMIN_PERMISSIONS.FORMULARIOS_ANEXOS);
+    if (possuiaGestaoEstruturalAgendamentos) {
+      next.add(ADMIN_PERMISSIONS.AGENDAMENTOS_CONFIGURAR);
+    }
   }
 
   return aplicarDependenciasPermissoes(Array.from(next));
@@ -3995,6 +4149,7 @@ function listarPermissoesDisponiveis() {
         { chave: ADMIN_PERMISSIONS.AGENDAMENTOS_VER, label: 'Ver agendamentos' },
         { chave: ADMIN_PERMISSIONS.AGENDAMENTOS_CANCELAR, label: 'Cancelar agendamentos' },
         { chave: ADMIN_PERMISSIONS.AGENDAMENTOS_REMARCAR, label: 'Remarcar agendamentos' },
+        { chave: ADMIN_PERMISSIONS.AGENDAMENTOS_CONFIGURAR, label: 'Configurar modalidades, locais, recursos e ofertas' },
       ],
     },
     {

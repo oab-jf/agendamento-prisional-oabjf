@@ -113,3 +113,36 @@ Executado em 13/08/2026:
 
 A observação automática pode permanecer ligada enquanto o desenvolvimento
 multimodal prossegue, sem promover o candidato a fonte oficial.
+## Catálogo configurável de Agendamentos
+
+Em 13/08/2026 foi publicada a fundação operacional do catálogo configurável.
+
+### Persistência
+
+Coleção Wix:
+
+- `AgendamentoConfiguracoes`;
+- aggregate principal: `catalogo-principal`;
+- permissões administrativas;
+- schema versionado e revisão otimista.
+
+### Arquivos Velo live
+
+- `adminApi.js` — `d45a1f3bd3f6e7635a32ee9be773b735bbe41cbde969486110485c8c35967be1`;
+- `http-functions.js` — `6395e1b519ef7ae564f89f3b0885aaf5cabf0a74b5cbd23be4a561585c525915`;
+- `agendamentosConfiguracao.js` — `32e0d2dfa51e9e1144aa81662665def9b56b4bc06b69ebe491459a97480cf581`;
+- `agendamentosConfiguracaoRepository.js` — `18df5a3c56bed3c0d1389546e112413cc048e66e495e845993a67b0141f4b195`;
+- `agendamentosConfiguracaoStore.js` — `b50f8b88b20bafd18f69da70cb861abff5c4bac580dd178f208ebe25a079616e`.
+
+### Smoke live
+
+- catálogo público: somente Atendimento Prisional;
+- catálogo administrativo: 4 modalidades;
+- ativos: 1;
+- rascunhos: 3;
+- revisão: 1;
+- agenda legada: `total=18`, `itens=18`.
+
+A resposta oficial da agenda prisional continua preservada. O catálogo
+configurável passa a controlar a disponibilidade pública das modalidades sem
+expor itens incompletos.
