@@ -6,7 +6,7 @@
  * prontidão e ativação sejam validadas atomicamente.
  */
 
-export const APPOINTMENT_CATALOG_SCHEMA_VERSION = 1;
+export const APPOINTMENT_CATALOG_SCHEMA_VERSION = 2;
 export const APPOINTMENT_CATALOG_RECORD_ID = "catalogo-principal";
 export const APPOINTMENT_CATALOG_COLLECTION_ID = "AgendamentoConfiguracoes";
 
@@ -180,11 +180,13 @@ export function createDefaultAppointmentCatalog() {
         name: "Unidades prisionais participantes",
         kind: "legacy_prison_units",
         capacity: 1,
+        amenityIds: [],
         status: CATALOG_STATUS.ACTIVE,
         protected: true,
         order: 10,
       },
     ],
+    amenities: [],
     offers: [
       {
         id: "atendimento-prisional-virtual",
@@ -242,14 +244,29 @@ function normalizeLocation(value) {
   };
 }
 
+function normalizeAmenity(value) {
+  const item = value && typeof value === "object" ? value : {};
+  return {
+    id: normalizeId(item.id),
+    name: text(item.name),
+    category: text(item.category || "Outro") || "Outro",
+    active: boolean(item.active, true),
+    order: integer(item.order, 9999),
+  };
+}
+
 function normalizeResource(value) {
   const item = value && typeof value === "object" ? value : {};
+  const amenityIds = Array.isArray(item.amenityIds)
+    ? Array.from(new Set(item.amenityIds.map(normalizeId).filter(Boolean)))
+    : [];
   return {
     id: normalizeId(item.id),
     locationId: normalizeId(item.locationId),
     name: text(item.name),
     kind: text(item.kind || "room") || "room",
     capacity: Math.max(1, integer(item.capacity, 1)),
+    amenityIds,
     status: normalizeStatus(item.status),
     protected: boolean(item.protected, false),
     order: integer(item.order, 9999),
@@ -313,6 +330,9 @@ function assertBasicEntityFields(catalog) {
   for (const resource of catalog.resources) {
     if (!resource.name || !resource.locationId) throw catalogError("RECURSO_DADOS_OBRIGATORIOS", `O recurso “${resource.id || "sem identificação"}” precisa de nome e local.`);
   }
+  for (const amenity of catalog.amenities) {
+    if (!amenity.name) throw catalogError("COMODIDADE_DADOS_OBRIGATORIOS", `O recurso ou comodidade “${amenity.id || "sem identificação"}” precisa de nome.`);
+  }
   for (const offer of catalog.offers) {
     if (!offer.name || !offer.modalityId || !offer.locationId || !offer.resourceId) {
       throw catalogError("OFERTA_DADOS_OBRIGATORIOS", `A oferta “${offer.id || "sem identificação"}” precisa de nome, modalidade, local e recurso.`);
@@ -324,8 +344,12 @@ function assertReferences(catalog) {
   const modalityIds = new Set(catalog.modalities.map((item) => item.id));
   const locationIds = new Set(catalog.locations.map((item) => item.id));
   const resourcesById = new Map(catalog.resources.map((item) => [item.id, item]));
+  const amenityIds = new Set(catalog.amenities.map((item) => item.id));
   for (const resource of catalog.resources) {
     if (!locationIds.has(resource.locationId)) throw catalogError("RECURSO_LOCAL_INEXISTENTE", `O recurso “${resource.name}” referencia um local inexistente.`);
+    for (const amenityId of resource.amenityIds) {
+      if (!amenityIds.has(amenityId)) throw catalogError("RECURSO_COMODIDADE_INEXISTENTE", `O item “${resource.name}” referencia um recurso ou comodidade inexistente.`);
+    }
   }
   for (const offer of catalog.offers) {
     const resource = resourcesById.get(offer.resourceId);
@@ -351,6 +375,7 @@ export function normalizeAppointmentCatalog(value, options = {}) {
     modalities: Array.isArray(raw.modalities) ? raw.modalities.map(normalizeModality) : [],
     locations: Array.isArray(raw.locations) ? raw.locations.map(normalizeLocation) : [],
     resources: Array.isArray(raw.resources) ? raw.resources.map(normalizeResource) : [],
+    amenities: Array.isArray(raw.amenities) ? raw.amenities.map(normalizeAmenity) : [],
     offers: Array.isArray(raw.offers) ? raw.offers.map(normalizeOffer) : [],
     updatedAt: text(raw.updatedAt) || null,
     updatedBy: text(raw.updatedBy) || "",
@@ -360,15 +385,18 @@ export function normalizeAppointmentCatalog(value, options = {}) {
     catalog.locations = preserveProtectedEntities(current.locations, catalog.locations);
     catalog.resources = preserveProtectedEntities(current.resources, catalog.resources);
     catalog.offers = preserveProtectedEntities(current.offers, catalog.offers);
+    catalog.amenities.sort(byOrderThenName);
   } else {
     catalog.modalities.sort(byOrderThenName);
     catalog.locations.sort(byOrderThenName);
     catalog.resources.sort(byOrderThenName);
+    catalog.amenities.sort(byOrderThenName);
     catalog.offers.sort(byOrderThenName);
   }
   uniqueById(catalog.modalities, "Modalidades");
   uniqueById(catalog.locations, "Locais");
   uniqueById(catalog.resources, "Recursos");
+  uniqueById(catalog.amenities, "Recursos e comodidades");
   uniqueById(catalog.offers, "Ofertas");
   assertBasicEntityFields(catalog);
   assertReferences(catalog);
@@ -458,7 +486,15 @@ export function buildPublicAppointmentCatalog(catalogValue) {
         durationMinutes: offer.durationMinutes,
         capacity: offer.capacity,
         location: location ? { id: location.id, name: location.name, address: location.address, kind: location.kind } : null,
-        resource: resource ? { id: resource.id, name: resource.name, kind: resource.kind } : null,
+        resource: resource ? {
+          id: resource.id,
+          name: resource.name,
+          kind: resource.kind,
+          amenities: resource.amenityIds
+            .map((amenityId) => catalog.amenities.find((item) => item.id === amenityId && item.active !== false))
+            .filter(Boolean)
+            .map((item) => ({ id: item.id, name: item.name, category: item.category })),
+        } : null,
         order: offer.order,
       };
     }).sort(byOrderThenName);

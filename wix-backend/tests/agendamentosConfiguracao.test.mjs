@@ -61,3 +61,47 @@ test("modalidade fica pronta com local, recurso, oferta e grade", () => {
   const saved = prepareAppointmentCatalogForSave(next, { currentValue: current, expectedRevision: 1 });
   assert.equal(evaluateModalityReadiness(saved, "espaco_atendimento").ready, true);
 });
+
+test("schema v2 adiciona recursos e comodidades sem quebrar catálogo legado", () => {
+  const current = createDefaultAppointmentCatalog();
+  const legacy = structuredClone(current);
+  delete legacy.amenities;
+  legacy.schemaVersion = 1;
+  legacy.resources = legacy.resources.map(({ amenityIds, ...resource }) => resource);
+  const saved = prepareAppointmentCatalogForSave(legacy, {
+    currentValue: current,
+    expectedRevision: 1,
+  });
+  assert.equal(saved.schemaVersion, 2);
+  assert.deepEqual(saved.amenities, []);
+  assert.deepEqual(saved.resources[0].amenityIds, []);
+});
+
+test("item agendável pode referenciar comodidades reutilizáveis", () => {
+  const current = createDefaultAppointmentCatalog();
+  const next = structuredClone(current);
+  next.amenities.push({ id: "tv", name: "TV", category: "Equipamento", active: true, order: 10 });
+  next.locations.push({ id: "sede-oab", name: "Sede OAB/JF", address: "Juiz de Fora", kind: "physical", status: "ativo" });
+  next.resources.push({ id: "sala-tv", locationId: "sede-oab", name: "Sala com TV", kind: "room", capacity: 1, amenityIds: ["tv"], status: "ativo" });
+  next.offers.push({ id: "sala-tv-agenda", modalityId: "espaco_atendimento", locationId: "sede-oab", resourceId: "sala-tv", name: "Sala com TV", description: "Reserva", status: "ativo", durationMinutes: 60, capacity: 1, bookingPath: "/agendar/salas-de-apoio/sala-tv-agenda", availabilityMode: AVAILABILITY_MODE.WEEKLY, weeklySchedule: [{ weekday: 1, startTime: "09:00", endTime: "12:00" }] });
+  next.modalities.find((x) => x.id === "espaco_atendimento").status = "ativo";
+
+  const saved = prepareAppointmentCatalogForSave(next, { currentValue: current, expectedRevision: 1 });
+  const publicCatalog = buildPublicAppointmentCatalog(saved);
+  const room = publicCatalog.modalities.find((item) => item.id === "espaco_atendimento")?.offers[0]?.resource;
+
+  assert.equal(saved.resources.find((item) => item.id === "sala-tv").amenityIds[0], "tv");
+  assert.deepEqual(room.amenities, [{ id: "tv", name: "TV", category: "Equipamento" }]);
+});
+
+test("comodidade inexistente é rejeitada antes de salvar", () => {
+  const current = createDefaultAppointmentCatalog();
+  const next = structuredClone(current);
+  next.locations.push({ id: "sede-oab", name: "Sede OAB/JF", address: "Juiz de Fora", kind: "physical", status: "rascunho" });
+  next.resources.push({ id: "sala-invalida", locationId: "sede-oab", name: "Sala", kind: "room", capacity: 1, amenityIds: ["tv-inexistente"], status: "rascunho" });
+
+  assert.throws(
+    () => prepareAppointmentCatalogForSave(next, { currentValue: current, expectedRevision: 1 }),
+    (error) => error.code === "RECURSO_COMODIDADE_INEXISTENTE",
+  );
+});
