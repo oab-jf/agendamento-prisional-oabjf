@@ -1,11 +1,6 @@
-/**
- * Compatibilidade: reexporta o shell institucional único.
- * Mantido para que as rotas existentes continuem funcionando
- * sem precisar trocar imports.
- */
 import { Link, useNavigate } from "@tanstack/react-router";
-import { ArrowLeft } from "lucide-react";
-import { memo, useMemo } from "react";
+import { ArrowLeft, ArrowRight, Check } from "lucide-react";
+import { memo } from "react";
 import type { ReactNode } from "react";
 import { AppShell } from "./AppShell";
 
@@ -15,56 +10,170 @@ type Props = {
   step?: { current: number; total: number };
   back?: string;
   showHeader?: boolean;
+  contextLabel?: string;
+  stepLabels?: string[];
 };
 
-function MobileShellComponent({ children, title, step, back }: Props) {
-  const rightSlot = useMemo(
-    () =>
-      back ? (
-        <Link
-          to={back as any}
-          aria-label="Voltar"
-          className="inline-flex items-center gap-1.5 rounded-md border border-clay/20 px-3 py-2 text-xs font-medium uppercase tracking-[0.15em] text-ink transition-colors hover:bg-sand"
-        >
-          <ArrowLeft className="h-3.5 w-3.5" strokeWidth={1.5} />
-          Voltar
-        </Link>
-      ) : (
-        <Link
-          to="/admin"
-          aria-label="Acesso administrativo"
-          className="hidden items-center gap-1.5 rounded-md border border-clay/20 px-3 py-2 text-xs font-medium uppercase tracking-[0.15em] text-ink transition-colors hover:bg-sand sm:inline-flex"
-        >
-          Acesso administrativo
-        </Link>
-      ),
-    [back],
-  );
+const BOOKING_STEPS = [
+  "Unidade",
+  "Data",
+  "Horário",
+  "Advogado",
+  "Pessoa custodiada",
+  "Regras",
+  "Revisão",
+];
+
+const DOCUMENT_STEPS = [
+  "Unidade",
+  "Advogado",
+  "Pessoa custodiada",
+  "Documento",
+  "Revisão",
+  "Conclusão",
+];
+
+const GENERIC_STEPS = ["Data", "Horário", "Seus dados", "Revisão"];
+
+function inferContext(title?: string) {
+  const normalized = (title || "").toLowerCase();
+  if (normalized.includes("consultar")) return "Agendamentos";
+  if (
+    normalized.includes("agendar") ||
+    normalized.includes("alterar data") ||
+    normalized.includes("alterar horário") ||
+    normalized.includes("enviar documento") ||
+    normalized.includes("solicitação")
+  ) {
+    return "Atendimento Prisional";
+  }
+  return "Central de Agendamentos";
+}
+
+function taskTitle(title?: string) {
+  if (!title) return "";
+  if (title === "Alterar data") return "Remarcar atendimento";
+  if (title === "Alterar horário") return "Remarcar atendimento";
+  return title;
+}
+
+function shouldShowFlowHeader(title?: string) {
+  if (!title || title === "Central de Agendamentos") return false;
+  if (title === "Agendamento confirmado" || title === "Solicitação enviada") return false;
+  return true;
+}
+
+function resolveSteps(title: string | undefined, total: number, custom?: string[]) {
+  if (custom?.length === total) return custom;
+  if (total === 7) return BOOKING_STEPS;
+  if (total === 6) return DOCUMENT_STEPS;
+  if (total === 4) return GENERIC_STEPS;
+  return Array.from({ length: total }, (_, index) => `Etapa ${index + 1}`);
+}
+
+function stepperTitle(title?: string, total?: number) {
+  const normalized = (title || "").toLowerCase();
+  if (normalized.includes("documento") || total === 6) return "Etapas do envio";
+  if (
+    normalized.includes("agendar") ||
+    normalized.includes("remarcar") ||
+    normalized.includes("alterar data") ||
+    normalized.includes("alterar horário") ||
+    total === 7 ||
+    total === 4
+  ) {
+    return "Etapas do agendamento";
+  }
+  return "Etapas";
+}
+
+function MobileShellComponent({
+  children,
+  title,
+  step,
+  contextLabel,
+  stepLabels,
+}: Props) {
+  const showFlowHeader = shouldShowFlowHeader(title);
+  const labels = step ? resolveSteps(title, step.total, stepLabels) : [];
 
   return (
-    <AppShell
-      title={title ?? "Central de Agendamento Prisional"}
-      step={step}
-      width="narrow"
-      rightSlot={rightSlot}
-    >
-      {children}
+    <AppShell width="wide" mainClassName={showFlowHeader ? "public-flow-page" : ""}>
+      {showFlowHeader ? (
+        <div className="public-flow-frame">
+          <Link to="/" className="public-flow-breadcrumb">
+            <ArrowLeft size={15} aria-hidden />
+            Central de Agendamentos
+          </Link>
+
+          <header className="public-flow-header">
+            <div className="public-flow-header__context">
+              <span>{contextLabel || inferContext(title)}</span>
+              <h1>{taskTitle(title)}</h1>
+            </div>
+
+            {step && (
+              <div className="public-flow-progress-mobile" aria-label={`Etapa ${step.current} de ${step.total}`}>
+                <div>
+                  <span>Etapa {step.current} de {step.total}</span>
+                  <strong>{labels[step.current - 1]}</strong>
+                </div>
+                <div aria-hidden>
+                  <span style={{ width: `${(step.current / step.total) * 100}%` }} />
+                </div>
+              </div>
+            )}
+          </header>
+
+          <div className="public-flow-layout">
+            <section className="public-flow-content">
+              <div className="public-flow-body">{children}</div>
+            </section>
+
+            {step && (
+              <aside className="public-flow-stepper" aria-label="Etapas do fluxo">
+                <span className="public-flow-stepper__eyebrow">{stepperTitle(title, step.total)}</span>
+                <ol>
+                  {labels.map((label, index) => {
+                    const number = index + 1;
+                    const done = number < step.current;
+                    const active = number === step.current;
+                    return (
+                      <li
+                        key={`${number}-${label}`}
+                        className={
+                          done
+                            ? "public-flow-stepper__done"
+                            : active
+                              ? "public-flow-stepper__active"
+                              : ""
+                        }
+                        aria-current={active ? "step" : undefined}
+                      >
+                        <span aria-hidden>{done ? <Check size={13} /> : number}</span>
+                        <strong>{label}</strong>
+                      </li>
+                    );
+                  })}
+                </ol>
+              </aside>
+            )}
+          </div>
+        </div>
+      ) : (
+        children
+      )}
     </AppShell>
   );
 }
 
 export const MobileShell = memo(MobileShellComponent);
 
-/** Título grande da etapa + subtítulo opcional. */
 export function PageTitle({ title, subtitle }: { title: string; subtitle?: string }) {
   return (
-    <div className="mb-6">
-      <h1 className="font-serif text-3xl leading-[1.1] tracking-tight text-ink md:text-4xl">
-        {title}
-      </h1>
-      {subtitle && (
-        <p className="mt-2 text-sm leading-relaxed text-clay md:text-base">{subtitle}</p>
-      )}
+    <div className="public-step-title">
+      <h2>{title}</h2>
+      {subtitle && <p>{subtitle}</p>}
     </div>
   );
 }
@@ -72,56 +181,57 @@ export function PageTitle({ title, subtitle }: { title: string; subtitle?: strin
 export function StepActions({
   back,
   next,
+  backLabel = "Voltar",
   nextLabel = "Continuar",
   nextDisabled,
+  onBack,
   onNext,
   destructiveNext,
 }: {
   back?: string;
   next?: string;
+  backLabel?: string;
   nextLabel?: string;
   nextDisabled?: boolean;
+  onBack?: () => void;
   onNext?: () => void;
   destructiveNext?: boolean;
 }) {
   const navigate = useNavigate();
 
+  function handleBack() {
+    if (onBack) return onBack();
+    if (back) navigate({ to: back as any });
+  }
+
   function handleNext() {
     if (nextDisabled) return;
-    if (onNext) {
-      onNext();
-      return;
-    }
+    if (onNext) return onNext();
     if (next) navigate({ to: next as any });
   }
 
   return (
-    <div className="mt-8 flex flex-col gap-3 border-t border-clay/15 pt-6 md:flex-row-reverse md:items-center md:justify-start md:gap-4">
+    <div className="public-flow-actions">
+      {(back || onBack) && (
+        <button type="button" onClick={handleBack} className="public-button public-button--secondary">
+          <ArrowLeft size={16} aria-hidden />
+          {backLabel}
+        </button>
+      )}
       <button
         type="button"
         onClick={handleNext}
         disabled={nextDisabled}
         aria-disabled={nextDisabled}
         className={
-          "inline-flex h-13 w-full items-center justify-center rounded-md px-6 py-4 text-sm font-medium uppercase tracking-[0.15em] transition-colors md:h-12 md:w-auto md:min-w-56 " +
-          (nextDisabled
-            ? "cursor-not-allowed bg-sand text-clay"
-            : destructiveNext
-            ? "bg-brand-red text-paper hover:bg-brand-red/90"
-            : "bg-ink text-paper hover:bg-brand-blue")
+          "public-button " +
+          (destructiveNext ? "public-button--danger" : "public-button--primary") +
+          (nextDisabled ? " public-button--disabled" : "")
         }
       >
         {nextLabel}
+        {!destructiveNext && <ArrowRight size={16} aria-hidden />}
       </button>
-      {back && (
-        <Link
-          to={back as any}
-          className="inline-flex h-12 w-full items-center justify-center text-sm font-medium text-clay transition-colors hover:text-brand-red md:w-auto md:justify-start"
-        >
-          ← Voltar
-        </Link>
-      )}
     </div>
   );
 }
-

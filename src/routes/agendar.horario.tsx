@@ -48,8 +48,8 @@ function Page() {
       back={backTo}
     >
       {booking.reagendando && (
-        <div className="mb-4 rounded-xl border border-primary/30 bg-primary/5 p-3 text-xs leading-relaxed text-foreground">
-          <div className="font-semibold text-primary">Alterando horário do agendamento</div>
+        <div className="public-context-note mb-4">
+          <div className="public-context-note__title">Alterando horário do agendamento</div>
           <div className="mt-1 text-muted-foreground">
             Dados preservados · Nova data: <span className="font-medium text-foreground">{booking.dataLabel ?? "—"}</span>
           </div>
@@ -62,9 +62,9 @@ function Page() {
       />
 
       {(!booking.unidadeId || !booking.data) && (
-        <div className="rounded-2xl border border-dashed bg-muted/40 p-5 text-sm leading-relaxed text-muted-foreground">
+        <div className="public-flow-empty public-flow-empty--compact text-left">
           Escolha a unidade e a data antes de selecionar o horário.{" "}
-          <Link to="/agendar/data" className="font-medium text-brand-blue underline">
+          <Link to="/agendar/data" className="public-text-action">
             Voltar
           </Link>
           .
@@ -72,7 +72,7 @@ function Page() {
       )}
 
       {booking.unidadeId && booking.data && loading && (
-        <div className="flex items-center justify-center gap-2 rounded-2xl border border-dashed bg-card p-8 text-sm text-muted-foreground">
+        <div className="public-flow-loading public-flow-loading--boxed">
           <Loader2 className="h-4 w-4 animate-spin" /> Carregando horários…
         </div>
       )}
@@ -85,7 +85,7 @@ function Page() {
           </div>
           <button
             onClick={carregar}
-            className="mt-4 inline-flex h-11 w-full items-center justify-center rounded-xl bg-ink text-sm font-medium uppercase tracking-[0.15em] text-paper hover:bg-brand-blue"
+            className="public-button public-button--primary mt-4 w-full"
           >
             Tentar novamente
           </button>
@@ -95,7 +95,7 @@ function Page() {
       {booking.unidadeId && booking.data && !loading && !error && (
         <>
           {horarios.length === 0 ? (
-            <div className="rounded-2xl border border-dashed bg-muted/40 p-5 text-sm text-muted-foreground">
+            <div className="public-flow-empty public-flow-empty--compact text-left">
               Nenhum horário disponível nesta data. Escolha outra data.
             </div>
           ) : (
@@ -108,10 +108,7 @@ function Page() {
                     type="button"
                     onClick={() => setBooking({ horario: h.horarioInicio, horarioFim: h.horarioFim })}
                     className={
-                      "h-12 rounded-xl border text-sm font-semibold transition-colors " +
-                      (selected
-                        ? "border-primary bg-primary text-primary-foreground"
-                        : "border-input bg-card text-foreground hover:bg-muted/40")
+                      "public-time " + (selected ? "public-time--selected" : "")
                     }
                   >
                     {h.label}

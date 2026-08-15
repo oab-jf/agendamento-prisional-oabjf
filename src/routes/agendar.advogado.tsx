@@ -69,7 +69,7 @@ function Page() {
             data-1p-ignore="true"
             data-form-type="other"
             spellCheck={false}
-            className="h-12 w-full rounded-xl border border-input bg-background px-4 text-base text-foreground placeholder:text-muted-foreground/60 focus:outline-none focus:ring-2 focus:ring-primary"
+            className="public-input h-11 w-full px-3.5 text-sm"
           />
         </div>
         <OabField value={advOab} onChange={setAdvOab} hint="Informe a UF e o número de inscrição." required error={show(errs.oab)} />

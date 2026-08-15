@@ -1,10 +1,13 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
-import { ArrowUpRight } from "lucide-react";
+import { ArrowRight, FileText, Search } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
+import type { ReactNode } from "react";
 import { MobileShell } from "@/components/MobileShell";
 import {
   listarCatalogoAgendamentos,
   type PublicAppointmentCatalog,
+  type PublicAppointmentModality,
+  type PublicAppointmentOffer,
 } from "@/lib/oab-api";
 
 export const Route = createFileRoute("/")({
@@ -21,7 +24,7 @@ const FALLBACK_CATALOG: PublicAppointmentCatalog = {
       template: "prisional",
       publicName: "Atendimento Prisional",
       description:
-        "Agendamento virtual com pessoa privada de liberdade nas unidades participantes.",
+        "Atendimento virtual com pessoa privada de liberdade nas unidades participantes.",
       order: 10,
       offers: [
         {
@@ -31,6 +34,13 @@ const FALLBACK_CATALOG: PublicAppointmentCatalog = {
           bookingPath: "/agendar/unidade",
           durationMinutes: 30,
           capacity: 1,
+          minimumNoticeHours: 0,
+          maximumAdvanceDays: 30,
+          cancelDeadlineHours: 0,
+          rescheduleDeadlineHours: 0,
+          availabilityMode: "legacy",
+          weeklySchedule: [],
+          instructions: "",
           location: {
             id: "atendimento-virtual",
             name: "Atendimento virtual",
@@ -67,133 +77,135 @@ function Home() {
   }, []);
 
   const visibleCatalog = catalog || FALLBACK_CATALOG;
-  const offers = useMemo(
-    () =>
-      visibleCatalog.modalities.flatMap((modality) =>
-        modality.offers.map((offer) => ({ modality, offer })),
-      ),
+  const modalities = useMemo(
+    () => visibleCatalog.modalities.filter((modality) => modality.offers.length > 0),
     [visibleCatalog],
   );
 
   return (
     <MobileShell>
-      <div className="mb-10 md:mb-14">
-        <div className="mb-3 text-[10px] font-medium uppercase tracking-[0.2em] text-brand-blue md:text-xs">
-          Serviços para a advocacia
-        </div>
-        <h1 className="font-serif text-4xl leading-[1.05] tracking-tight text-ink md:text-6xl">
-          Central de <em className="font-serif italic text-brand-blue">Agendamentos</em>
-        </h1>
-        <div className="mt-5 h-px w-16 bg-brand-red" />
-        <p className="mt-5 max-w-2xl text-xs leading-relaxed text-clay md:text-lg">
-          Escolha o atendimento desejado. Novas modalidades só ficam disponíveis
-          quando a OAB/JF conclui e ativa toda a configuração operacional.
+      <section className="public-home-hero">
+        <span className="eyebrow-public">Serviços para a advocacia</span>
+        <h1>Central de Agendamentos</h1>
+        <p>
+          Agende atendimentos e espaços disponibilizados pela OAB Juiz de Fora.
+          Acompanhe reservas já realizadas e acesse as operações vinculadas aos serviços.
         </p>
-      </div>
+      </section>
 
-      <div className="grid gap-3 md:grid-cols-3 md:gap-5">
-        {offers.map(({ modality, offer }, index) => (
-          <ActionItem
-            key={offer.id}
-            number={String(index + 1).padStart(2, "0")}
-            to={offer.bookingPath.startsWith("/") ? offer.bookingPath : undefined}
-            href={offer.bookingPath.startsWith("/") ? undefined : offer.bookingPath}
-            title={offer.name}
-            desc={offer.description || modality.description}
-            eyebrow={modality.publicName}
-          />
-        ))}
-      </div>
-
-      <section className="mt-10 border-t border-clay/15 pt-7 md:mt-14 md:pt-9">
-        <div className="mb-4 text-[10px] font-medium uppercase tracking-[0.2em] text-brand-blue md:text-xs">
-          Atendimento Prisional
+      <section className="public-home-section" aria-labelledby="servicos-title">
+        <div className="public-home-section__heading">
+          <div>
+            <span className="eyebrow-public" id="servicos-title">Serviços disponíveis</span>
+            <p>Escolha o serviço que deseja utilizar.</p>
+          </div>
         </div>
-        <div className="grid gap-3 md:grid-cols-2 md:gap-5">
-          <ActionItem
-            number="A"
-            to="/documento/unidade"
-            title="Enviar documento ou procuração"
-            desc="Encaminhe documentos para assinatura da pessoa custodiada."
-          />
-          <ActionItem
-            number="B"
-            to="/consultar"
-            title="Consultar agendamento"
-            desc="Acompanhe, cancele ou remarque usando protocolo e e-mail."
-          />
+
+        <div className="public-service-grid">
+          {modalities.map((modality) => (
+            <ServiceCard key={modality.id} modality={modality} />
+          ))}
         </div>
       </section>
 
-      <div className="mt-6 text-center md:hidden">
-        <Link
-          to="/admin"
-          className="inline-flex items-center gap-1.5 text-[10px] uppercase tracking-[0.2em] text-clay transition-colors hover:text-brand-red"
-        >
-          Acesso administrativo OAB
-          <ArrowUpRight className="h-3 w-3" strokeWidth={1.5} />
-        </Link>
-      </div>
+      <section className="public-home-support" aria-labelledby="acoes-title">
+        <div className="public-home-section__heading">
+          <div>
+            <span className="eyebrow-public" id="acoes-title">Ações rápidas</span>
+            <p>Consulte uma reserva existente ou envie documentos vinculados ao Atendimento Prisional.</p>
+          </div>
+        </div>
+
+        <div className="public-support-grid">
+          <SupportLink
+            to="/consultar"
+            icon={<Search aria-hidden />}
+            title="Consultar agendamento"
+            desc="Localize, cancele ou remarque uma reserva usando protocolo e e-mail."
+          />
+          <SupportLink
+            to="/documento/unidade"
+            icon={<FileText aria-hidden />}
+            title="Enviar documento"
+            desc="Encaminhe documento ou procuração vinculados ao Atendimento Prisional."
+          />
+        </div>
+      </section>
     </MobileShell>
   );
 }
 
-function ActionItem({
-  number,
-  to,
-  href,
-  title,
-  desc,
-  eyebrow,
-}: {
-  number: string;
-  to?: string;
-  href?: string;
-  title: string;
-  desc: string;
-  eyebrow?: string;
-}) {
-  const className =
-    "group relative flex min-h-[112px] items-start gap-4 border border-clay/15 bg-sand px-5 py-4 transition-colors hover:border-brand-red/40 hover:bg-sand/70 active:bg-sand/50 md:min-h-[210px] md:flex-col md:gap-5 md:px-6 md:py-7";
-  const inner = (
-    <>
-      <div aria-hidden className="absolute left-0 top-0 h-full w-0.5 bg-brand-red" />
-      <div className="flex shrink-0 items-baseline gap-2 pt-0.5">
-        <span className="font-serif text-2xl leading-none text-brand-blue md:text-3xl">
-          {number}
-        </span>
-      </div>
-      <div className="min-w-0 flex-1">
-        {eyebrow && (
-          <div className="mb-2 text-[9px] font-semibold uppercase tracking-[0.16em] text-brand-red md:text-[10px]">
-            {eyebrow}
-          </div>
-        )}
-        <div className="font-serif text-lg leading-tight text-ink transition-colors group-hover:text-brand-red md:text-2xl">
-          {title}
-        </div>
-        <div className="mt-1.5 text-sm leading-relaxed text-clay md:text-base">
-          {desc}
-        </div>
-      </div>
-      <ArrowUpRight
-        className="mt-1 h-4 w-4 shrink-0 text-brand-blue transition-all group-hover:translate-x-0.5 group-hover:-translate-y-0.5 group-hover:text-brand-red md:absolute md:right-5 md:top-5 md:h-5 md:w-5"
-        strokeWidth={1.5}
-      />
-    </>
-  );
+function actionLabel(
+  modality: PublicAppointmentModality,
+  offer: PublicAppointmentOffer,
+  multiple: boolean,
+) {
+  if (modality.id === "prisional_virtual") return "Agendar atendimento";
+  if (!multiple) return "Agendar atendimento";
+  return offer.resource?.name || offer.name;
+}
 
-  if (href) {
-    return (
-      <a href={href} className={className}>
-        {inner}
-      </a>
-    );
-  }
+function ServiceCard({ modality }: { modality: PublicAppointmentModality }) {
+  const multiple = modality.offers.length > 1;
 
   return (
-    <Link to={(to || "/") as any} className={className}>
-      {inner}
+    <article className="public-service-card">
+      <div className="public-service-card__content">
+        <h3>{modality.publicName}</h3>
+        <p>{modality.description}</p>
+      </div>
+
+      <div className="public-service-card__actions">
+        {modality.offers.map((offer) => {
+          const label = actionLabel(modality, offer, multiple);
+          const inner = (
+            <>
+              <span>
+                <strong>{label}</strong>
+                {multiple && offer.location?.name && <small>{offer.location.name}</small>}
+              </span>
+              <ArrowRight aria-hidden />
+            </>
+          );
+
+          if (offer.bookingPath.startsWith("/")) {
+            return (
+              <Link key={offer.id} to={offer.bookingPath as any} className="public-service-card__action">
+                {inner}
+              </Link>
+            );
+          }
+
+          return (
+            <a key={offer.id} href={offer.bookingPath} className="public-service-card__action">
+              {inner}
+            </a>
+          );
+        })}
+      </div>
+    </article>
+  );
+}
+
+function SupportLink({
+  to,
+  icon,
+  title,
+  desc,
+}: {
+  to: string;
+  icon: ReactNode;
+  title: string;
+  desc: string;
+}) {
+  return (
+    <Link to={to as any} className="public-support-link">
+      <div className="public-support-link__icon" aria-hidden>{icon}</div>
+      <div>
+        <h3>{title}</h3>
+        <p>{desc}</p>
+      </div>
+      <ArrowRight className="public-support-link__arrow" aria-hidden />
     </Link>
   );
 }

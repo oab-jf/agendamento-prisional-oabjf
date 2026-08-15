@@ -78,13 +78,10 @@ test("datas invertidas são rejeitadas", () => {
   );
 });
 
-test("modalidade desconhecida é rejeitada", () => {
-  assert.throws(
-    () =>
-      normalizeAppointmentQuery({
-        modalityIds: ["modalidade_inexistente"],
-      }),
-    /Modalidade desconhecida/,
+test("modalidade do catálogo operacional pode ser usada como filtro", () => {
+  assert.deepEqual(
+    normalizeAppointmentQuery({ modalityIds: ["mentoria_advocacia"] }).modalityIds,
+    ["mentoria_advocacia"],
   );
 });
 

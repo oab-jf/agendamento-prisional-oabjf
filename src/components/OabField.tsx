@@ -73,7 +73,7 @@ export function OabField({ label = "Número da OAB", value, onChange, required, 
               window.setTimeout(() => numRef.current?.focus(), 0);
             }
           }}
-          className={`h-12 w-20 rounded-xl border bg-background px-3 text-center text-base font-semibold uppercase tracking-wider text-foreground placeholder:font-normal placeholder:text-muted-foreground/60 focus:outline-none focus:ring-2 focus:ring-primary ${borderCls}`}
+          className={`h-12 w-20 rounded-sm border bg-background px-3 text-center text-base font-semibold uppercase tracking-wider text-foreground placeholder:font-normal placeholder:text-muted-foreground/60 focus:outline-none focus:ring-2 focus:ring-brand-red/35 ${borderCls}`}
         />
         {/* Campo número: até 7 dígitos, teclado numérico no mobile. */}
         <input
@@ -99,7 +99,7 @@ export function OabField({ label = "Número da OAB", value, onChange, required, 
               el?.focus();
             }
           }}
-          className={`h-12 flex-1 rounded-xl border bg-background px-4 text-base text-foreground placeholder:text-muted-foreground/60 focus:outline-none focus:ring-2 focus:ring-primary ${borderCls}`}
+          className={`h-12 flex-1 rounded-sm border bg-background px-4 text-base text-foreground placeholder:text-muted-foreground/60 focus:outline-none focus:ring-2 focus:ring-brand-red/35 ${borderCls}`}
         />
       </div>
       {error ? (

@@ -9,7 +9,6 @@
 import {
   APPOINTMENT_STATUS,
   MODALITY_IDS,
-  getModalityDefinition,
   normalizeAppointmentRecord,
 } from "backend/agendamentosCore";
 
@@ -62,15 +61,7 @@ function normalizePositiveInteger(value, fallback, maximum) {
 }
 
 function normalizeModalityIds(value) {
-  const ids = normalizeArray(value);
-
-  for (const modalityId of ids) {
-    if (!getModalityDefinition(modalityId)) {
-      throw new Error(`Modalidade desconhecida: ${modalityId}`);
-    }
-  }
-
-  return ids;
+  return normalizeArray(value);
 }
 
 function normalizeStatuses(value) {
@@ -348,10 +339,9 @@ export function buildAppointmentQueryPlan(input = {}) {
     query.modalityIds.length === 0 ||
     query.modalityIds.includes(MODALITY_IDS.PRISIONAL_VIRTUAL);
 
-  const v2Modalities =
-    query.modalityIds.length > 0
-      ? query.modalityIds
-      : Object.values(MODALITY_IDS);
+  // Vazio significa “todas as modalidades v2”. O catálogo operacional pode
+  // criar novos IDs sem exigir nova versão deste adaptador.
+  const v2Modalities = query.modalityIds;
 
   const legacyUnitSlugs = query.resourceIds
     .filter((resourceId) => resourceId.startsWith("prisional:"))

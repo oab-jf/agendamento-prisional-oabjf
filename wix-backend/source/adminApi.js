@@ -25,6 +25,11 @@ import {
   obterCatalogoAgendamentosPublicoCore,
 } from 'backend/agendamentosConfiguracaoStore';
 
+import {
+  liberarOcupacaoAgendamento,
+  remarcarAgendamentoPublicoV2,
+} from 'backend/agendamentosPublicosStore';
+
 const COL = {
   UNIDADES: 'Import4258',
   AGENDAMENTOS: 'Import4259',
@@ -2061,7 +2066,7 @@ export async function consultarAgendamentoPublicoApi(payload = {}) {
       return consultaAgendamentoNaoEncontrada();
     }
 
-    const emailRegistro = normalizeEmail(item.emailAdvogado || item.emailIndex);
+    const emailRegistro = normalizeEmail(item.solicitanteEmail || item.emailAdvogado || item.emailIndex);
 
     if (!emailRegistro || emailRegistro !== emailAdvogado) {
       return consultaAgendamentoNaoEncontrada();
@@ -2122,7 +2127,7 @@ export async function cancelarAgendamentoPublicoApi(payload = {}) {
       return consultaAgendamentoNaoEncontrada();
     }
 
-    const emailRegistro = normalizeEmail(item.emailAdvogado || item.emailIndex);
+    const emailRegistro = normalizeEmail(item.solicitanteEmail || item.emailAdvogado || item.emailIndex);
 
     if (!emailRegistro || emailRegistro !== emailAdvogado) {
       return consultaAgendamentoNaoEncontrada();
@@ -2131,6 +2136,13 @@ export async function cancelarAgendamentoPublicoApi(payload = {}) {
     const statusAtual = text(item.status || 'agendado').toLowerCase() || 'agendado';
 
     if (statusAtual === 'cancelado') {
+      if (Number(item.schemaVersion || 0) >= 2 && text(item.modalidadeId)) {
+        try {
+          await liberarOcupacaoAgendamento(item);
+        } catch (releaseError) {
+          console.warn('Agendamento já cancelado; lock será limpo de forma oportunista.', releaseError);
+        }
+      }
       return {
         ok: true,
         codigo: 'JA_CANCELADO',
@@ -2161,6 +2173,16 @@ export async function cancelarAgendamentoPublicoApi(payload = {}) {
     const salvo = await wixData.update(COL.AGENDAMENTOS, atualizado, {
       suppressAuth: true,
     });
+
+    if (Number(salvo.schemaVersion || 0) >= 2 && text(salvo.modalidadeId)) {
+      try {
+        await liberarOcupacaoAgendamento(salvo);
+      } catch (releaseError) {
+        // O status cancelado já impede a ocupação lógica no próximo cálculo.
+        // Não devolve falso erro ao usuário depois de o cancelamento ter sido salvo.
+        console.warn('Cancelamento v2 concluído; lock será limpo de forma oportunista.', releaseError);
+      }
+    }
 
     return {
       ok: true,
@@ -2261,7 +2283,7 @@ export async function remarcarAgendamentoPublicoApi(payload = {}) {
       return consultaAgendamentoNaoEncontrada();
     }
 
-    const emailRegistro = normalizeEmail(original.emailAdvogado || original.emailIndex);
+    const emailRegistro = normalizeEmail(original.solicitanteEmail || original.emailAdvogado || original.emailIndex);
 
     if (!emailRegistro || emailRegistro !== emailAdvogado) {
       return consultaAgendamentoNaoEncontrada();
@@ -2275,6 +2297,31 @@ export async function remarcarAgendamentoPublicoApi(payload = {}) {
         codigo: permissao.codigo || 'REMARCACAO_NAO_PERMITIDA',
         mensagem: permissao.mensagem || 'Este agendamento não pode ser remarcado pela Central.',
         agendamento: mapAgendamentoConsultaPublica(original),
+      };
+    }
+
+    if (Number(original.schemaVersion || 0) >= 2 && text(original.modalidadeId)) {
+      const resultadoV2 = await remarcarAgendamentoPublicoV2(original, {
+        dateIso: dataIsoDestino,
+        startTime: horarioInicioDestino,
+      });
+
+      if (!resultadoV2.ok) {
+        return {
+          ok: false,
+          codigo: resultadoV2.code || 'REMARCACAO_NAO_CONCLUIDA',
+          mensagem: resultadoV2.message || 'Não foi possível remarcar o agendamento.',
+          agendamento: mapAgendamentoConsultaPublica(original),
+        };
+      }
+
+      return {
+        ok: true,
+        mensagem: 'Agendamento remarcado com sucesso.',
+        protocolo: resultadoV2.protocolo,
+        agendamento: mapAgendamentoConsultaPublica(resultadoV2.appointment),
+        agendamentoOriginal: mapAgendamentoConsultaPublica(resultadoV2.original),
+        novoAgendamento: mapAgendamentoConsultaPublica(resultadoV2.appointment),
       };
     }
 
@@ -2385,8 +2432,8 @@ export async function remarcarAgendamentoPublicoApi(payload = {}) {
 
       nomeAdvogado: text(original.nomeAdvogado),
       numeroOab: text(original.numeroOab),
-      emailAdvogado: normalizeEmail(original.emailAdvogado || original.emailIndex),
-      emailIndex: normalizeEmail(original.emailAdvogado || original.emailIndex),
+      emailAdvogado: normalizeEmail(original.solicitanteEmail || original.emailAdvogado || original.emailIndex),
+      emailIndex: normalizeEmail(original.solicitanteEmail || original.emailAdvogado || original.emailIndex),
       telefoneAdvogado: text(original.telefoneAdvogado),
 
       nomeIpl: text(original.nomeIpl),
@@ -4825,7 +4872,7 @@ function mapAgendamentoImpactoBloqueio(item = {}) {
     horarioLabel: horarioInicio && horarioFim ? `${horarioInicio} – ${horarioFim}` : horarioInicio,
     nomeAdvogado: text(item.nomeAdvogado),
     numeroOab: text(item.numeroOab),
-    emailAdvogado: normalizeEmail(item.emailAdvogado || item.emailIndex),
+    emailAdvogado: normalizeEmail(item.solicitanteEmail || item.emailAdvogado || item.emailIndex),
     nomeIpl: text(item.nomeIpl),
     infopen: text(item.infopen),
     listaDiariaEnviada: item.listaDiariaEnviada === true,
@@ -5743,22 +5790,43 @@ function mapAgendamentoConsultaPublica(item) {
   );
 
   const horarioInicio = normalizeTime(item.horarioInicio || item.horario);
+  const duracao = Math.max(5, Number(item.duracaoMinutos || 30));
   const horarioFim =
     normalizeTime(item.horarioFim || item.horarioFinal) ||
-    addMinutesToTime(horarioInicio, 30);
+    addMinutesToTime(horarioInicio, duracao);
 
   const status = text(item.status || 'agendado').toLowerCase() || 'agendado';
+  const isV2 = Number(item.schemaVersion || 0) >= 2 && Boolean(text(item.modalidadeId));
 
   const reagendadoParaHorarioInicio = normalizeTime(item.reagendadoParaHorarioInicio);
   const reagendadoParaHorarioFim =
     normalizeTime(item.reagendadoParaHorarioFim) ||
-    addMinutesToTime(reagendadoParaHorarioInicio, 30);
+    addMinutesToTime(reagendadoParaHorarioInicio, duracao);
 
   const permissaoCancelamento = calcularPermissaoCancelamentoUsuario(item);
   const permissaoRemarcacao = calcularPermissaoRemarcacaoUsuario(item);
+  const prazoCancelamentoHoras = Math.max(
+    0,
+    Number(isV2 ? item.cancelamentoPrazoHoras : CANCELAMENTO_ANTECEDENCIA_HORAS) || 0
+  );
+  const prazoRemarcacaoHoras = Math.max(
+    0,
+    Number(isV2 ? item.remarcacaoPrazoHoras : REMARCACAO_ANTECEDENCIA_HORAS) || 0
+  );
 
   return {
     protocolo: text(item.protocolo || item.title),
+    schemaVersion: isV2 ? 2 : 1,
+    modalidadeId: text(item.modalidadeId),
+    modalidadeFamiliaId: text(item.modalidadeFamiliaId),
+    servicoNome: text(item.modalidadeNome),
+    ofertaId: text(item.ofertaId),
+    ofertaNome: text(item.ofertaNome),
+    localId: text(item.localId),
+    localNome: text(item.localNome),
+    localEndereco: text(item.localEndereco),
+    recursoId: text(item.recursoId),
+    recursoNome: text(item.recursoNome),
 
     unidadeSlug: text(item.unidadeSlug),
     unidadeNome: text(item.unidadeNome),
@@ -5773,9 +5841,10 @@ function mapAgendamentoConsultaPublica(item) {
         ? `${horarioInicio} – ${horarioFim}`
         : horarioInicio,
 
-    nomeAdvogado: text(item.nomeAdvogado),
-    numeroOab: text(item.numeroOab),
-    emailAdvogado: text(item.emailAdvogado || item.emailIndex),
+    nomeAdvogado: text(item.solicitanteNome || item.nomeAdvogado),
+    numeroOab: text(item.solicitanteOab || item.numeroOab),
+    emailAdvogado: text(item.solicitanteEmail || item.emailAdvogado || item.emailIndex),
+    telefoneAdvogado: text(item.solicitanteTelefone || item.telefoneAdvogado),
 
     nomeIpl: text(item.nomeIpl),
     infopen: text(item.infopen),
@@ -5800,13 +5869,13 @@ function mapAgendamentoConsultaPublica(item) {
     cancelamentoPermitido: permissaoCancelamento.podeCancelar,
     cancelamentoCodigo: permissaoCancelamento.codigo,
     cancelamentoMensagem: permissaoCancelamento.mensagem,
-    prazoCancelamentoHoras: CANCELAMENTO_ANTECEDENCIA_HORAS,
+    prazoCancelamentoHoras,
 
     podeRemarcar: permissaoRemarcacao.podeRemarcar,
     remarcacaoPermitida: permissaoRemarcacao.podeRemarcar,
     remarcacaoCodigo: permissaoRemarcacao.codigo,
     remarcacaoMensagem: permissaoRemarcacao.mensagem,
-    prazoRemarcacaoHoras: REMARCACAO_ANTECEDENCIA_HORAS,
+    prazoRemarcacaoHoras,
   };
 }
 
@@ -6303,7 +6372,15 @@ function calcularPermissaoCancelamentoUsuario(item) {
 
   const agora = nowSaoPauloPseudoDate();
   const diffMs = atendimento.getTime() - agora.getTime();
-  const prazoMs = CANCELAMENTO_ANTECEDENCIA_HORAS * 60 * 60 * 1000;
+  const prazoHoras = Math.max(
+    0,
+    Number(
+      Number(item.schemaVersion || 0) >= 2
+        ? item.cancelamentoPrazoHoras
+        : CANCELAMENTO_ANTECEDENCIA_HORAS
+    ) || 0
+  );
+  const prazoMs = prazoHoras * 60 * 60 * 1000;
 
   if (diffMs <= 0) {
     return {
@@ -6317,7 +6394,7 @@ function calcularPermissaoCancelamentoUsuario(item) {
     return {
       podeCancelar: false,
       codigo: 'PRAZO_ENCERRADO',
-      mensagem: `O cancelamento pela Central está disponível até ${CANCELAMENTO_ANTECEDENCIA_HORAS} horas antes do horário agendado.`,
+      mensagem: `O cancelamento pela Central está disponível até ${prazoHoras} horas antes do horário agendado.`,
     };
   }
 
@@ -6376,7 +6453,15 @@ function calcularPermissaoRemarcacaoUsuario(item) {
 
   const agora = nowSaoPauloPseudoDate();
   const diffMs = atendimento.getTime() - agora.getTime();
-  const prazoMs = REMARCACAO_ANTECEDENCIA_HORAS * 60 * 60 * 1000;
+  const prazoHoras = Math.max(
+    0,
+    Number(
+      Number(item.schemaVersion || 0) >= 2
+        ? item.remarcacaoPrazoHoras
+        : REMARCACAO_ANTECEDENCIA_HORAS
+    ) || 0
+  );
+  const prazoMs = prazoHoras * 60 * 60 * 1000;
 
   if (diffMs <= 0) {
     return {
@@ -6390,7 +6475,7 @@ function calcularPermissaoRemarcacaoUsuario(item) {
     return {
       podeRemarcar: false,
       codigo: 'PRAZO_ENCERRADO',
-      mensagem: `A remarcação pela Central está disponível até ${REMARCACAO_ANTECEDENCIA_HORAS} horas antes do horário agendado.`,
+      mensagem: `A remarcação pela Central está disponível até ${prazoHoras} horas antes do horário agendado.`,
     };
   }
 

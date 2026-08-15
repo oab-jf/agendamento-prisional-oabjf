@@ -572,9 +572,9 @@ test("getById retorna null para ID vazio ou não encontrado", async () => {
   assert.equal(await repository.getById("inexistente"), null);
 });
 
-test("registros v2 com modalidade desconhecida não entram no ramo candidato", async () => {
+test("registros v2 de modalidades criadas pelo catálogo entram no ramo candidato", async () => {
   const wixData = createFakeWixData([
-    v2(0, { modalidadeId: "desconhecida" }),
+    v2(0, { modalidadeId: "mentoria_advocacia", modalidadeFamiliaId: "formacao" }),
     v2(1),
   ]);
   const repository = createWixAppointmentsRepository({ wixData });
@@ -583,7 +583,7 @@ test("registros v2 com modalidade desconhecida não entram no ramo candidato", a
 
   assert.deepEqual(
     page.items.map((item) => item.id),
-    ["v2-1"],
+    ["v2-0", "v2-1"],
   );
 });
 

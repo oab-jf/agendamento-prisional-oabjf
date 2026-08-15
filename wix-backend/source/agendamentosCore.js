@@ -223,16 +223,12 @@ export function buildSlotIdentity({
   dateIso,
   startTime,
 }) {
-  const definition = getModalityDefinition(modalityId);
+  const normalizedModality = text(modalityId);
   const normalizedResource = text(resourceId);
   const normalizedDate = normalizeDateIsoLoose(dateIso);
   const normalizedTime = normalizeTimeLoose(startTime);
 
-  if (!definition) {
-    throw new Error(`Modalidade desconhecida: ${text(modalityId)}`);
-  }
-
-  if (!normalizedResource || !normalizedDate || !normalizedTime) {
+  if (!normalizedModality || !normalizedResource || !normalizedDate || !normalizedTime) {
     throw new Error(
       "Modalidade, recurso, data e horário são obrigatórios para a identidade do slot.",
     );
@@ -240,7 +236,7 @@ export function buildSlotIdentity({
 
   return [
     "v2",
-    encodeSlotPart(definition.id),
+    encodeSlotPart(normalizedModality),
     encodeSlotPart(normalizedResource),
     normalizedDate,
     normalizedTime,
@@ -367,8 +363,8 @@ function normalizeVersionedAppointment(record) {
   const modalityId = text(record.modalidadeId || record.modalityId);
   const definition = getModalityDefinition(modalityId);
 
-  if (!definition) {
-    throw new Error(`Modalidade desconhecida: ${modalityId || "(vazia)"}`);
+  if (!modalityId) {
+    throw new Error("Modalidade do agendamento v2 é obrigatória.");
   }
 
   const resourceId = text(record.recursoId || record.resourceId);
@@ -381,7 +377,7 @@ function normalizeVersionedAppointment(record) {
 
   const durationMinutes = normalizePositiveInteger(
     record.duracaoMinutos || record.durationMinutes,
-    definition.defaults.durationMinutes || 30,
+    definition?.defaults?.durationMinutes || 30,
   );
 
   const endTime =
@@ -405,7 +401,12 @@ function normalizeVersionedAppointment(record) {
     legacy: false,
 
     modalityId,
-    modalityFamilyId: definition.familyId,
+    modalityFamilyId: text(
+      record.modalidadeFamiliaId ||
+        record.modalityFamilyId ||
+        definition?.familyId ||
+        "geral",
+    ) || "geral",
 
     protocol: text(record.protocolo || record.protocol || record.title),
     status: normalizeAppointmentStatus(record.status),

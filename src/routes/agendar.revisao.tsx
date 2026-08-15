@@ -98,16 +98,16 @@ function Page() {
     <MobileShell title="Agendar atendimento" step={{ current: 7, total: 7 }} back={booking.reagendando ? "/agendar/horario" : "/agendar/regras"}>
       <PageTitle title="Revisão e confirmação" subtitle="Confira os dados antes de confirmar." />
 
-      <div className="overflow-hidden rounded-2xl border bg-card">
-        {items.map(([k, v], i) => (
-          <div key={k} className={"flex items-start justify-between gap-4 p-3.5 text-sm " + (i > 0 ? "border-t" : "")}>
-            <span className="shrink-0 text-muted-foreground">{k}</span>
-            <span className={"text-right font-medium " + (v ? "text-foreground" : "text-destructive")}>{v || "Não informado"}</span>
+      <dl className="public-summary">
+        {items.map(([k, v]) => (
+          <div key={k}>
+            <dt>{k}</dt>
+            <dd className={!v ? "text-destructive" : undefined}>{v || "Não informado"}</dd>
           </div>
         ))}
-      </div>
+      </dl>
 
-      <p className="mt-3 border-l-2 border-primary/40 pl-3 text-xs leading-relaxed text-muted-foreground">
+      <p className="public-context-note mt-4">
         <span className="font-medium text-foreground">Uso do e-mail:</span>{" "}
         o endereço informado será compartilhado com a unidade prisional para o envio do link de acesso e comunicações diretamente relacionadas ao atendimento. A OAB/JF também poderá usá-lo para confirmações e avisos sobre este agendamento.
       </p>

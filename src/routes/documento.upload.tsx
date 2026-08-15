@@ -32,6 +32,7 @@ function Page() {
   const [file, setFile] = useState<File | null>(null);
   const [fileError, setFileError] = useState<string | null>(null);
   const [uploading, setUploading] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState(0);
   const [attempted, setAttempted] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
 
@@ -91,8 +92,9 @@ function Page() {
 
     if (!file) return;
     setUploading(true);
+    setUploadProgress(0);
     try {
-      const res = await uploadDocumentoArquivo(file);
+      const res = await uploadDocumentoArquivo(file, setUploadProgress);
       if (!res.ok) {
         const msg = res.message || res.error || "Não foi possível enviar o arquivo.";
         toast.error("Erro no envio", { description: msg });
@@ -114,6 +116,7 @@ function Page() {
       toast.error("Erro no envio", { description: "Verifique sua conexão e tente novamente." });
     } finally {
       setUploading(false);
+      setUploadProgress(0);
     }
   }
 
@@ -169,7 +172,7 @@ function Page() {
                 (arquivoInvalido ? "border-destructive" : "border-input")
               }
             >
-              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary">
+              <div className="document-upload-file-card__icon shrink-0">
                 <FileText className="h-5 w-5" />
               </div>
               <div className="min-w-0 flex-1">
@@ -236,8 +239,17 @@ function Page() {
         </div>
 
         {uploading && (
-          <div className="flex items-center justify-center gap-2 rounded-xl border border-dashed bg-card p-4 text-sm text-muted-foreground">
-            <Loader2 className="h-4 w-4 animate-spin" /> Enviando arquivo…
+          <div className="document-upload-progress" role="status" aria-live="polite">
+            <div className="document-upload-progress__meta">
+              <span className="inline-flex items-center gap-2">
+                <Loader2 className="h-4 w-4 animate-spin" aria-hidden />
+                Enviando arquivo diretamente ao armazenamento
+              </span>
+              <strong>{uploadProgress > 0 ? `${uploadProgress}%` : "Preparando…"}</strong>
+            </div>
+            <div className="document-upload-progress__track" aria-hidden>
+              <span style={{ width: `${Math.max(4, uploadProgress)}%` }} />
+            </div>
           </div>
         )}
       </div>

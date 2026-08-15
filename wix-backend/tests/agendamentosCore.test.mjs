@@ -198,18 +198,24 @@ test("um registro v2 mantém a modalidade explícita", () => {
   assert.equal(normalized.specificData.space.attendees, 6);
 });
 
-test("modalidade v2 desconhecida é rejeitada", () => {
-  assert.throws(
-    () =>
-      normalizeAppointmentRecord({
-        schemaVersion: 2,
-        modalidadeId: "modalidade_inexistente",
-        recursoId: "recurso",
-        dataAtendimentoIso: "2026-08-21",
-        horarioInicio: "10:00",
-        status: "agendado",
-      }),
-    /Modalidade desconhecida/,
+test("modalidade criada pelo catálogo operacional é aceita no schema v2", () => {
+  const normalized = normalizeAppointmentRecord({
+    schemaVersion: 2,
+    modalidadeId: "mentoria_advocacia",
+    modalidadeFamiliaId: "geral",
+    recursoId: "sede:sala-mentoria",
+    dataAtendimentoIso: "2026-08-21",
+    horarioInicio: "10:00",
+    duracaoMinutos: 45,
+    status: "agendado",
+  });
+
+  assert.equal(normalized.modalityId, "mentoria_advocacia");
+  assert.equal(normalized.modalityFamilyId, "geral");
+  assert.equal(normalized.slot.endTime, "10:45");
+  assert.equal(
+    normalized.slot.identity,
+    "v2|mentoria_advocacia|sede%3Asala-mentoria|2026-08-21|10:00",
   );
 });
 

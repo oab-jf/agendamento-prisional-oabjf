@@ -20,6 +20,13 @@ export type PublicAppointmentOffer = {
   bookingPath: string;
   durationMinutes: number;
   capacity: number;
+  minimumNoticeHours: number;
+  maximumAdvanceDays: number;
+  cancelDeadlineHours: number;
+  rescheduleDeadlineHours: number;
+  availabilityMode: string;
+  weeklySchedule: Array<{ weekday: number; startTime: string; endTime: string }>;
+  instructions: string;
   location: {
     id: string;
     name: string;
@@ -30,6 +37,7 @@ export type PublicAppointmentOffer = {
     id: string;
     name: string;
     kind: string;
+    amenities?: Array<{ id: string; name: string; category: string }>;
   } | null;
   order: number;
 };
@@ -57,6 +65,7 @@ const CACHE_HORARIOS_MS = 45 * 1000;
 type CacheEntry<T> = { expiresAt: number; value: T };
 
 const memoryCache = new Map<string, CacheEntry<unknown>>();
+const inFlightCache = new Map<string, Promise<unknown>>();
 
 function canUseMemoryCache() {
   return typeof window !== "undefined";
@@ -76,11 +85,25 @@ function readMemoryCache<T>(key: string): T | null {
 async function cached<T>(key: string, ttlMs: number, loader: () => Promise<T>): Promise<T> {
   const hit = readMemoryCache<T>(key);
   if (hit) return hit;
-  const value = await loader();
+
   if (canUseMemoryCache()) {
-    memoryCache.set(key, { value, expiresAt: Date.now() + ttlMs });
+    const pending = inFlightCache.get(key) as Promise<T> | undefined;
+    if (pending) return pending;
   }
-  return value;
+
+  const request = loader()
+    .then((value) => {
+      if (canUseMemoryCache()) {
+        memoryCache.set(key, { value, expiresAt: Date.now() + ttlMs });
+      }
+      return value;
+    })
+    .finally(() => {
+      if (canUseMemoryCache()) inFlightCache.delete(key);
+    });
+
+  if (canUseMemoryCache()) inFlightCache.set(key, request);
+  return request;
 }
 
 export async function listarCatalogoAgendamentos(): Promise<PublicAppointmentCatalog> {
@@ -100,6 +123,106 @@ export async function listarCatalogoAgendamentos(): Promise<PublicAppointmentCat
 
     return raw.catalogo;
   });
+}
+
+export type PublicBookingContext = {
+  modality: { id: string; familyId: string; publicName: string; description: string };
+  offer: {
+    id: string;
+    name: string;
+    description: string;
+    durationMinutes: number;
+    capacity: number;
+    minimumNoticeHours: number;
+    maximumAdvanceDays: number;
+    cancelDeadlineHours: number;
+    rescheduleDeadlineHours: number;
+    instructions: string;
+  };
+  location: { id: string; name: string; address: string; kind: string };
+  resource: {
+    id: string;
+    name: string;
+    kind: string;
+    amenities: Array<{ id: string; name: string; category: string }>;
+  };
+};
+
+export type PublicBookingDate = {
+  id: string;
+  dataIso: string;
+  label: string;
+  labelCompleta: string;
+  diaSemana: string;
+  disponivel: boolean;
+};
+
+export type PublicBookingSlot = {
+  id: string;
+  value: string;
+  label: string;
+  dataIso: string;
+  horarioInicio: string;
+  horarioFim: string;
+  capacidade: number;
+  ocupacao: number;
+  vagasRestantes: number;
+  disponivel: boolean;
+};
+
+export async function listarDisponibilidadeOferta(
+  offerId: string,
+  dataIso = "",
+): Promise<{ context: PublicBookingContext; dates?: PublicBookingDate[]; slots?: PublicBookingSlot[] }> {
+  const qs = new URLSearchParams({ offerId });
+  if (dataIso) qs.set("dataIso", dataIso);
+  const response = await fetch(`${API_BASE}/oabAgendamentoDisponibilidade?${qs.toString()}`, {
+    headers: { Accept: "application/json" },
+  });
+  const raw = (await response.json().catch(() => null)) as
+    | {
+        ok?: boolean;
+        context?: PublicBookingContext;
+        dates?: PublicBookingDate[];
+        slots?: PublicBookingSlot[];
+        mensagem?: string;
+      }
+    | null;
+  if (!response.ok || !raw?.ok || !raw.context) {
+    throw new Error(raw?.mensagem || "Não foi possível carregar os horários disponíveis.");
+  }
+  return { context: raw.context, dates: raw.dates || [], slots: raw.slots || [] };
+}
+
+export type GenericBookingPayload = {
+  offerId: string;
+  dateIso: string;
+  startTime: string;
+  name: string;
+  oabNumber: string;
+  email: string;
+  phone: string;
+  rulesAccepted: boolean;
+};
+
+export async function confirmarAgendamentoV2(
+  payload: GenericBookingPayload,
+): Promise<{ ok: true; protocolo: string; agendamento?: Record<string, unknown> } | { ok: false; code?: string; message?: string }> {
+  const response = await fetch(`${API_BASE}/oabAgendamentosV2`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Accept: "application/json" },
+    body: JSON.stringify(payload),
+  });
+  const raw = (await response.json().catch(() => null)) as AnyErr | Record<string, unknown> | null;
+  if (!raw) return { ok: false, message: `HTTP ${response.status}` };
+  if ((raw as { ok?: boolean }).ok === true) {
+    return {
+      ok: true,
+      protocolo: String((raw as Record<string, unknown>).protocolo || (raw as Record<string, unknown>).protocol || ""),
+      agendamento: ((raw as Record<string, unknown>).agendamento || (raw as Record<string, unknown>).appointment) as Record<string, unknown> | undefined,
+    };
+  }
+  return normalizeApiError(raw as AnyErr, "Não foi possível confirmar o agendamento.");
 }
 
 export type ApiOk<T> = { ok: true } & T;
@@ -569,17 +692,24 @@ export type DocumentoUploadResposta =
     }
   | { ok: false; code?: string; error?: string; message?: string };
 
-async function fileToBase64(file: File): Promise<string> {
-  const buf = await file.arrayBuffer();
-  const bytes = new Uint8Array(buf);
-  // Codifica em chunks para evitar estouro de call stack em arquivos maiores.
-  let binary = "";
-  const chunk = 0x8000;
-  for (let i = 0; i < bytes.length; i += chunk) {
-    binary += String.fromCharCode(...bytes.subarray(i, i + chunk));
-  }
-  return btoa(binary);
-}
+type DocumentoUploadTicketResposta =
+  | {
+      ok: true;
+      uploadUrl: string;
+      fileName: string;
+      mimeType: string;
+    }
+  | { ok: false; code?: string; error?: string; message?: string };
+
+type WixDirectUploadItem = {
+  file_name?: string;
+  original_file_name?: string;
+  file_size?: number | string;
+  media_type?: string;
+  mime_type?: string;
+  width?: number;
+  height?: number;
+};
 
 export function validarArquivoDocumento(file: File): string | undefined {
   const nome = file.name.toLowerCase();
@@ -597,45 +727,183 @@ export function validarArquivoDocumento(file: File): string | undefined {
   return undefined;
 }
 
-export async function uploadDocumentoArquivo(file: File): Promise<DocumentoUploadResposta> {
+function requestTimeoutMessage() {
+  return "O envio demorou além do esperado. Verifique sua conexão e tente novamente.";
+}
+
+async function solicitarUrlUploadDocumento(file: File): Promise<DocumentoUploadTicketResposta> {
+  const controller = new AbortController();
+  const timeout = window.setTimeout(() => controller.abort(), 8000);
+
+  try {
+    const response = await fetch(`${API_BASE}/oabDocumentoUploadUrl`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      body: JSON.stringify({
+        fileName: file.name,
+        mimeType: file.type || "application/octet-stream",
+        sizeInBytes: file.size,
+      }),
+      signal: controller.signal,
+    });
+
+    const raw = (await response.json().catch(() => null)) as
+      | (DocumentoUploadTicketResposta & AnyErr)
+      | null;
+
+    if (!raw) {
+      return { ok: false, code: "UPLOAD_URL_HTTP", error: `HTTP ${response.status}`, message: `HTTP ${response.status}` };
+    }
+
+    if (response.ok && raw.ok === true && "uploadUrl" in raw) {
+      return raw;
+    }
+
+    return normalizeApiError(raw, `HTTP ${response.status}`);
+  } catch (error) {
+    if (error instanceof DOMException && error.name === "AbortError") {
+      return {
+        ok: false,
+        code: "UPLOAD_URL_TIMEOUT",
+        error: requestTimeoutMessage(),
+        message: requestTimeoutMessage(),
+      };
+    }
+    throw error;
+  } finally {
+    window.clearTimeout(timeout);
+  }
+}
+
+function wixMediaUrlFromUpload(item: WixDirectUploadItem): string {
+  const fileName = String(item.file_name || "").trim();
+  const originalName = String(item.original_file_name || "").trim();
+  const mediaType = String(item.media_type || "").toLowerCase();
+
+  if (!fileName || !originalName) return "";
+
+  if (mediaType === "document") {
+    return `wix:document://v1/${fileName}/${originalName}`;
+  }
+
+  if (mediaType === "picture" || mediaType === "image") {
+    const width = Number(item.width || 0);
+    const height = Number(item.height || 0);
+    const dimensions = width > 0 && height > 0
+      ? `#originWidth=${width}&originHeight=${height}`
+      : "";
+    return `wix:image://v1/${fileName}/${originalName}${dimensions}`;
+  }
+
+  return "";
+}
+
+function uploadTimeoutMs(file: File) {
+  const megabytes = Math.max(1, Math.ceil(file.size / (1024 * 1024)));
+  return Math.min(30000, 12000 + megabytes * 2200);
+}
+
+function enviarArquivoDireto(
+  uploadUrl: string,
+  uploadFileName: string,
+  file: File,
+  onProgress?: (percent: number) => void,
+): Promise<WixDirectUploadItem> {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    const target = new URL(uploadUrl);
+    target.searchParams.set("filename", uploadFileName);
+
+    xhr.open("PUT", target.toString(), true);
+    xhr.setRequestHeader("Content-Type", file.type || "application/octet-stream");
+    xhr.timeout = uploadTimeoutMs(file);
+
+    xhr.upload.onprogress = (event) => {
+      if (!event.lengthComputable || !onProgress) return;
+      onProgress(Math.max(1, Math.min(99, Math.round((event.loaded / event.total) * 100))));
+    };
+
+    xhr.onerror = () => reject(new Error("Não foi possível conectar ao armazenamento de arquivos."));
+    xhr.onabort = () => reject(new Error("O envio foi interrompido."));
+    xhr.ontimeout = () => reject(new Error(requestTimeoutMessage()));
+
+    xhr.onload = () => {
+      if (xhr.status < 200 || xhr.status >= 300) {
+        reject(new Error(`O armazenamento respondeu HTTP ${xhr.status}.`));
+        return;
+      }
+
+      let raw: unknown;
+      try {
+        raw = JSON.parse(xhr.responseText || "null");
+      } catch {
+        reject(new Error("O armazenamento não retornou uma resposta válida."));
+        return;
+      }
+
+      const item = Array.isArray(raw)
+        ? raw[0]
+        : raw && typeof raw === "object" && "file" in raw
+          ? (raw as { file?: WixDirectUploadItem }).file
+          : raw;
+
+      if (!item || typeof item !== "object") {
+        reject(new Error("O armazenamento não retornou os dados do arquivo."));
+        return;
+      }
+
+      onProgress?.(100);
+      resolve(item as WixDirectUploadItem);
+    };
+
+    xhr.send(file);
+  });
+}
+
+export async function uploadDocumentoArquivo(
+  file: File,
+  onProgress?: (percent: number) => void,
+): Promise<DocumentoUploadResposta> {
   const invalido = validarArquivoDocumento(file);
   if (invalido) {
     return { ok: false, code: "ARQUIVO_INVALIDO", error: invalido, message: invalido };
   }
-  let fileBase64: string;
+
+  onProgress?.(0);
+
   try {
-    fileBase64 = await fileToBase64(file);
-  } catch (e) {
-    console.error(e);
+    const ticket = await solicitarUrlUploadDocumento(file);
+    if (!ticket.ok) return ticket;
+
+    const uploaded = await enviarArquivoDireto(ticket.uploadUrl, ticket.fileName, file, onProgress);
+    const arquivoPrincipalUrl = wixMediaUrlFromUpload(uploaded);
+
+    if (!arquivoPrincipalUrl) {
+      return {
+        ok: false,
+        code: "UPLOAD_SEM_URL",
+        error: "O arquivo foi enviado, mas não foi possível identificar a URL armazenada.",
+        message: "O arquivo foi enviado, mas não foi possível identificar a URL armazenada.",
+      };
+    }
+
     return {
-      ok: false,
-      code: "ARQUIVO_LEITURA",
-      error: "Não foi possível ler o arquivo selecionado.",
-      message: "Não foi possível ler o arquivo selecionado.",
+      ok: true,
+      mensagem: "Arquivo enviado com sucesso.",
+      arquivoPrincipalUrl,
+      arquivoPrincipalNome: file.name,
+      arquivo: {
+        url: arquivoPrincipalUrl,
+        nome: file.name,
+        nomeSalvo: ticket.fileName,
+        mimeType: String(uploaded.mime_type || ticket.mimeType || file.type),
+        tamanhoBytes: Number(uploaded.file_size || file.size),
+      },
     };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Não foi possível enviar o arquivo.";
+    return { ok: false, code: "UPLOAD_DIRETO_FALHOU", error: message, message };
   }
-  const res = await fetch(`${API_BASE}/oabDocumentoUpload`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", Accept: "application/json" },
-    body: JSON.stringify({
-      fileName: file.name,
-      mimeType: file.type || "application/octet-stream",
-      fileBase64,
-    }),
-  });
-  let raw: AnyErr | DocumentoUploadResposta | null = null;
-  try {
-    raw = (await res.json()) as never;
-  } catch {
-    /* sem corpo JSON */
-  }
-  if (!raw) {
-    return { ok: false, error: `HTTP ${res.status}`, message: `HTTP ${res.status}` };
-  }
-  if ((raw as { ok?: boolean }).ok === true) {
-    return raw as DocumentoUploadResposta;
-  }
-  return normalizeApiError(raw as AnyErr, `HTTP ${res.status}`);
 }
 
 export type DocumentoSolicitacaoPayload = {
@@ -805,7 +1073,18 @@ export type ConsultaAgendamentoPayload = {
 
 export type ConsultaAgendamento = {
   protocolo: string;
-  unidadeNome: string;
+  schemaVersion?: number;
+  modalidadeId?: string;
+  modalidadeFamiliaId?: string;
+  servicoNome?: string;
+  ofertaId?: string;
+  ofertaNome?: string;
+  localId?: string;
+  localNome?: string;
+  localEndereco?: string;
+  recursoId?: string;
+  recursoNome?: string;
+  unidadeNome?: string;
   unidadeSlug?: string;
   dataIso?: string;
   dataLabel?: string;

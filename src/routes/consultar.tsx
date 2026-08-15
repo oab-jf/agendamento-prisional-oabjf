@@ -1,4 +1,4 @@
-import { createFileRoute, Link } from "@tanstack/react-router";
+import { createFileRoute } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 import {
   Loader2,
@@ -9,7 +9,7 @@ import {
   XCircle,
   CalendarClock,
 } from "lucide-react";
-import { MobileShell, PageTitle } from "@/components/MobileShell";
+import { MobileShell } from "@/components/MobileShell";
 import { Field } from "@/components/Field";
 import { emailError } from "@/lib/validators";
 import {
@@ -18,6 +18,7 @@ import {
   remarcarAgendamentoUsuario,
   listarDatasDisponiveis,
   listarHorariosDisponiveis,
+  listarDisponibilidadeOferta,
   type ConsultaAgendamento,
   type DataDisponivel,
   type HorarioDisponivel,
@@ -87,15 +88,14 @@ function Page() {
   }
 
   return (
-    <MobileShell title="Consultar agendamento" back="/">
+    <MobileShell title="Consultar agendamento" contextLabel="Agendamentos" back="/">
       {!resultado ? (
         <>
-          <PageTitle
-            title="Consultar agendamento"
-            subtitle="Informe o protocolo recebido no e-mail e o e-mail do(a) advogado(a) que fez o agendamento."
-          />
+          <div className="public-task-intro">
+            <p>Informe o protocolo recebido por e-mail e o e-mail usado no agendamento.</p>
+          </div>
 
-          <form onSubmit={submit} className="flex flex-col gap-4" noValidate>
+          <form onSubmit={submit} className="public-query-form flex flex-col gap-4" noValidate>
             <Field
               label="Protocolo"
               value={protocolo}
@@ -124,16 +124,14 @@ function Page() {
               </div>
             )}
 
-            <div className="mt-2 flex flex-col gap-3 border-t border-clay/15 pt-6 md:flex-row-reverse md:items-center md:justify-start md:gap-4">
+            <div className="public-query-actions">
               <button
                 type="submit"
                 disabled={loading}
                 aria-disabled={loading}
                 className={
-                  "inline-flex h-13 w-full items-center justify-center gap-2 rounded-md px-6 py-4 text-sm font-medium uppercase tracking-[0.15em] transition-colors md:h-12 md:w-auto md:min-w-56 " +
-                  (loading
-                    ? "cursor-not-allowed bg-sand text-clay"
-                    : "bg-ink text-paper hover:bg-brand-blue")
+                  "public-button w-full md:w-auto " +
+                  (loading ? "public-button--disabled" : "public-button--primary")
                 }
               >
                 {loading ? (
@@ -148,12 +146,6 @@ function Page() {
                   </>
                 )}
               </button>
-              <Link
-                to="/"
-                className="inline-flex h-12 w-full items-center justify-center text-sm font-medium text-clay transition-colors hover:text-brand-red md:w-auto md:justify-start"
-              >
-                ← Voltar para a Central
-              </Link>
             </div>
           </form>
         </>
@@ -215,6 +207,13 @@ function ResultadoCard({
     protocolo,
     statusLabel,
     status,
+    schemaVersion,
+    servicoNome,
+    ofertaId,
+    ofertaNome,
+    localNome,
+    localEndereco,
+    recursoNome,
     unidadeNome,
     unidadeSlug,
     dataLabel,
@@ -245,6 +244,7 @@ function ResultadoCard({
   const ehAtivo = statusLower.includes("agend") && !statusLower.includes("reagend") && !statusLower.includes("cancel") && !statusLower.includes("realiz") && !statusLower.includes("conclu");
   const permitido = podeCancelar === true || cancelamentoPermitido === true;
   const podeRemarcarUi = podeRemarcar === true || remarcacaoPermitida === true;
+  const isGeneric = Number(schemaVersion || 0) >= 2 && Boolean(ofertaId);
 
   const [confirmando, setConfirmando] = useState(false);
   const [cancelando, setCancelando] = useState(false);
@@ -267,11 +267,26 @@ function ResultadoCard({
   const [visualizando, setVisualizando] = useState(false);
 
   useEffect(() => {
-    if (!remarcarAberto || !unidadeSlug) return;
+    if (!remarcarAberto || (!unidadeSlug && !isGeneric)) return;
     let cancelado = false;
     setCarregandoDatas(true);
     setDatasVisiveis(DATAS_PAGE);
-    listarDatasDisponiveis(unidadeSlug)
+
+    const loader = isGeneric && ofertaId
+      ? listarDisponibilidadeOferta(ofertaId).then((result) =>
+          (result.dates || []).map((item) => ({
+            id: item.id,
+            dataIso: item.dataIso,
+            label: item.labelCompleta || item.label,
+            diaSemana: item.diaSemana,
+            diaMes: item.label,
+            disponivel: item.disponivel,
+            encerrado: false,
+          })),
+        )
+      : listarDatasDisponiveis(unidadeSlug || "");
+
+    loader
       .then((d) => {
         if (!cancelado) setDatas(d);
       })
@@ -284,15 +299,29 @@ function ResultadoCard({
     return () => {
       cancelado = true;
     };
-  }, [remarcarAberto, unidadeSlug]);
+  }, [remarcarAberto, unidadeSlug, isGeneric, ofertaId]);
 
   useEffect(() => {
-    if (!remarcarAberto || !unidadeSlug || !dataSel) return;
+    if (!remarcarAberto || !dataSel || (!unidadeSlug && !isGeneric)) return;
     let cancelado = false;
     setCarregandoHorarios(true);
     setHorarios([]);
     setHorarioSel(null);
-    listarHorariosDisponiveis(unidadeSlug, dataSel.dataIso)
+
+    const loader = isGeneric && ofertaId
+      ? listarDisponibilidadeOferta(ofertaId, dataSel.dataIso).then((result) =>
+          (result.slots || []).map((item) => ({
+            id: item.id,
+            value: item.value,
+            label: item.label,
+            horarioInicio: item.horarioInicio,
+            horarioFim: item.horarioFim,
+            disponivel: item.disponivel,
+          })),
+        )
+      : listarHorariosDisponiveis(unidadeSlug || "", dataSel.dataIso);
+
+    loader
       .then((h) => {
         if (!cancelado) setHorarios(h);
       })
@@ -305,7 +334,7 @@ function ResultadoCard({
     return () => {
       cancelado = true;
     };
-  }, [remarcarAberto, unidadeSlug, dataSel]);
+  }, [remarcarAberto, unidadeSlug, dataSel, isGeneric, ofertaId]);
 
   function abrirRemarcar() {
     setDataSel(null);
@@ -408,11 +437,22 @@ function ResultadoCard({
         </div>
 
         <dl className="grid grid-cols-1 gap-4 px-5 py-5 sm:grid-cols-2">
-          <Info2 label="Unidade prisional" value={unidadeNome} />
+          {isGeneric ? (
+            <>
+              <Info2 label="Serviço" value={servicoNome || ofertaNome} />
+              <Info2 label="Atendimento" value={recursoNome || ofertaNome} />
+              <Info2 label="Local" value={localNome} />
+              {localEndereco && <Info2 label="Endereço" value={localEndereco} />}
+            </>
+          ) : (
+            <>
+              <Info2 label="Unidade prisional" value={unidadeNome} />
+              <Info2 label="Nome da IPL" value={nomeIpl} />
+              {infopen && <Info2 label="INFOPEN" value={infopen} />}
+            </>
+          )}
           <Info2 label="Data" value={dataLabel} />
           <Info2 label="Horário" value={horario} />
-          <Info2 label="Nome da IPL" value={nomeIpl} />
-          {infopen && <Info2 label="INFOPEN" value={infopen} />}
           <Info2 label="Advogado(a)" value={nomeAdvogado} />
           <Info2 label="OAB" value={numeroOab} />
         </dl>
@@ -479,7 +519,7 @@ function ResultadoCard({
                     setVisualizando(false);
                   }
                 }}
-                className="mt-3 inline-flex h-9 items-center justify-center gap-2 rounded-md border border-emerald-300 bg-paper px-3 text-xs font-medium text-emerald-900 transition-colors hover:bg-emerald-100 disabled:cursor-not-allowed disabled:opacity-60"
+                className="public-button public-button--secondary mt-3 min-h-9 px-3 py-2 text-xs"
               >
                 {visualizando ? (
                   <>
@@ -500,18 +540,19 @@ function ResultadoCard({
 
       {ehAtivo &&
         !sucessoCancel &&
-        (podeRemarcarUi && unidadeSlug ? true : permitido) && (
+        !sucessoRemarcar &&
+        (podeRemarcarUi && (unidadeSlug || isGeneric) ? true : permitido) && (
           <div className="mt-6 rounded-2xl border border-clay/20 bg-sand/30 px-4 py-4 sm:px-5 sm:py-5">
             <h3 className="text-base font-semibold text-ink sm:text-lg">Ações do agendamento</h3>
             <p className="mt-1 text-sm leading-relaxed text-clay">
-              {podeRemarcarUi && unidadeSlug && permitido
+              {podeRemarcarUi && (unidadeSlug || isGeneric) && permitido
                 ? "Você pode remarcar ou cancelar este agendamento dentro do prazo permitido."
-                : podeRemarcarUi && unidadeSlug
+                : podeRemarcarUi && (unidadeSlug || isGeneric)
                   ? "Você pode remarcar este agendamento dentro do prazo permitido."
                   : "Você pode cancelar este agendamento dentro do prazo permitido."}
             </p>
             <div className="mt-4 flex flex-col gap-2 sm:flex-row sm:items-center sm:gap-3">
-              {podeRemarcarUi && unidadeSlug && (
+              {podeRemarcarUi && (unidadeSlug || isGeneric) && (
                 <button
                   type="button"
                   onClick={abrirRemarcar}
@@ -555,16 +596,10 @@ function ResultadoCard({
         <button
           type="button"
           onClick={onNova}
-          className="inline-flex h-13 w-full items-center justify-center rounded-md bg-ink px-6 py-4 text-sm font-medium uppercase tracking-[0.15em] text-paper transition-colors hover:bg-brand-blue md:h-12 md:w-auto md:min-w-56"
+          className="public-button public-button--primary w-full md:w-auto"
         >
           Fazer nova consulta
         </button>
-        <Link
-          to="/"
-          className="inline-flex h-12 w-full items-center justify-center text-sm font-medium text-clay transition-colors hover:text-brand-red md:w-auto md:justify-start"
-        >
-          ← Voltar para a Central
-        </Link>
       </div>
 
       {confirmando && (
@@ -643,7 +678,10 @@ function ResultadoCard({
                 {remarcarEtapa === "escolher" ? "Remarcar agendamento" : "Confirmar remarcação?"}
               </h3>
               <p className="mt-1 text-xs text-clay">
-                Unidade: <span className="font-medium text-ink">{unidadeNome}</span>
+                {isGeneric ? "Atendimento" : "Unidade"}: {" "}
+                <span className="font-medium text-ink">
+                  {isGeneric ? recursoNome || ofertaNome : unidadeNome}
+                </span>
               </p>
             </div>
 
@@ -757,7 +795,7 @@ function ResultadoCard({
               ) : (
                 <div className="flex flex-col gap-4">
                   <div className="flex items-start gap-3">
-                    <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0 text-amber-600" strokeWidth={1.5} />
+                    <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0 text-brand-red" strokeWidth={1.5} />
                     <p className="text-sm leading-relaxed text-clay">
                       Essa ação criará um novo protocolo e o agendamento atual será marcado como
                       reagendado.

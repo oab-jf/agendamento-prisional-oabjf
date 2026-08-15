@@ -11,6 +11,7 @@ export const Route = createFileRoute("/documento/sucesso")({
 function Page() {
   const { doc, resetDoc } = usePrototype();
   const nav = useNavigate();
+  const envioComErro = doc.emailUnidadeEnviado === false || doc.status === "com_erro";
 
   function novo() {
     resetDoc();
@@ -24,68 +25,56 @@ function Page() {
 
   return (
     <MobileShell title="Solicitação enviada" showHeader>
-      <div className="flex flex-1 flex-col">
-        <div className="mx-auto mb-5 mt-3 flex h-20 w-20 items-center justify-center rounded-full bg-primary/10 text-primary">
-          <CheckCircle2 className="h-10 w-10" />
-        </div>
-        <h1 className="text-center text-2xl font-bold text-foreground">
-          {doc.emailUnidadeEnviado === false || doc.status === "com_erro"
-            ? "Solicitação registrada"
-            : "Solicitação enviada"}
-        </h1>
-        <p className="mt-2 text-center text-sm text-muted-foreground">
-          {doc.emailUnidadeEnviado === false || doc.status === "com_erro"
-            ? "Sua solicitação foi registrada, mas houve falha no envio automático para a unidade. A OAB poderá acompanhar pelo painel administrativo."
-            : "Sua solicitação foi registrada e a unidade prisional foi notificada."}
+      <section className="public-success">
+        <CheckCircle2 className="public-success__icon" aria-hidden />
+        <span className="eyebrow-public">Atendimento Prisional</span>
+        <h1>{envioComErro ? "Solicitação registrada" : "Solicitação enviada"}</h1>
+        <p>
+          {envioComErro
+            ? "A solicitação foi registrada. A OAB poderá acompanhar o encaminhamento pelo painel administrativo."
+            : "A solicitação foi registrada e encaminhada à unidade prisional."}
         </p>
 
-        <div className="mt-5 rounded-2xl border bg-card p-4">
-          <div className="text-xs uppercase tracking-wider text-muted-foreground">Protocolo</div>
-          <div className="mt-1 flex items-center gap-2">
-            <span className="text-xl font-bold tracking-wide text-foreground break-all">
-              {doc.protocolo ?? "—"}
-            </span>
+        <div className="public-success__protocol">
+          <span>Protocolo</span>
+          <div className="public-success__protocol-row">
+            <strong>{doc.protocolo ?? "—"}</strong>
             {doc.protocolo && <CopyButton value={doc.protocolo} />}
           </div>
-          <hr className="my-3" />
-          <Row k="Unidade" v={doc.unidadeNome} />
-          <Row k="Advogado(a)" v={doc.advNome} />
-          <Row k="OAB" v={doc.advOab} />
-          <Row k="Nome da IPL" v={doc.ipl} />
-          <Row k="Tipo de documento" v={doc.tipoDocumentoLabel} />
-          <Row k="Arquivo" v={doc.arquivoPrincipalNome} />
         </div>
 
-        <div className="mt-4 flex items-start gap-3 rounded-xl border bg-muted/40 p-3 text-xs leading-relaxed text-muted-foreground">
-          <Info className="mt-0.5 h-4 w-4 shrink-0 text-primary" />
-          A unidade prisional devolverá o documento assinado diretamente ao advogado, conforme fluxo definido.
+        <dl className="public-summary text-left">
+          <SummaryRow k="Unidade" v={doc.unidadeNome} />
+          <SummaryRow k="Advogado(a)" v={doc.advNome} />
+          <SummaryRow k="OAB" v={doc.advOab} />
+          <SummaryRow k="Pessoa custodiada" v={doc.ipl} />
+          <SummaryRow k="Tipo de documento" v={doc.tipoDocumentoLabel} />
+          <SummaryRow k="Arquivo" v={doc.arquivoPrincipalNome} />
+        </dl>
+
+        <div className="public-note text-left">
+          <Info className="public-note__icon" aria-hidden />
+          A unidade prisional devolverá o documento assinado diretamente ao advogado, conforme o fluxo de atendimento.
         </div>
 
-        <div className="mt-auto flex flex-col gap-3 pt-6">
-          <button
-            onClick={novo}
-            className="h-14 w-full rounded-xl bg-primary text-base font-semibold text-primary-foreground"
-          >
+        <div className="public-success__actions">
+          <button onClick={novo} className="public-button public-button--primary">
             Enviar novo documento
           </button>
-          <button
-            onClick={voltarCentral}
-            className="flex h-12 w-full items-center justify-center rounded-xl border text-sm font-medium"
-          >
+          <button onClick={voltarCentral} className="public-button public-button--secondary">
             Voltar para a Central
           </button>
         </div>
-      </div>
+      </section>
     </MobileShell>
   );
 }
 
-function Row({ k, v }: { k: string; v?: string }) {
+function SummaryRow({ k, v }: { k: string; v?: string }) {
   return (
-    <div className="flex items-start justify-between gap-3 py-1.5 text-sm">
-      <span className="text-muted-foreground">{k}</span>
-      <span className="text-right font-medium text-foreground">{v ?? "—"}</span>
+    <div>
+      <dt>{k}</dt>
+      <dd>{v ?? "—"}</dd>
     </div>
   );
 }
-

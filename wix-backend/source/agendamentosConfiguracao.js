@@ -485,6 +485,13 @@ export function buildPublicAppointmentCatalog(catalogValue) {
         bookingPath: offer.bookingPath,
         durationMinutes: offer.durationMinutes,
         capacity: offer.capacity,
+        minimumNoticeHours: offer.minimumNoticeHours,
+        maximumAdvanceDays: offer.maximumAdvanceDays,
+        cancelDeadlineHours: offer.cancelDeadlineHours,
+        rescheduleDeadlineHours: offer.rescheduleDeadlineHours,
+        availabilityMode: offer.availabilityMode,
+        weeklySchedule: clone(offer.weeklySchedule),
+        instructions: offer.instructions,
         location: location ? { id: location.id, name: location.name, address: location.address, kind: location.kind } : null,
         resource: resource ? {
           id: resource.id,

@@ -9,34 +9,30 @@
 // Additionally, you should also exclude this file from your linter and/or formatter to prevent it from being checked or modified.
 
 import { Route as rootRouteImport } from './routes/__root'
-import { Route as GestaoRouteImport } from './routes/gestao'
-import { Route as ConsultarRouteImport } from './routes/consultar'
-import { Route as AdminRouteImport } from './routes/admin'
 import { Route as IndexRouteImport } from './routes/index'
-import { Route as DocumentoUploadRouteImport } from './routes/documento.upload'
-import { Route as DocumentoUnidadeRouteImport } from './routes/documento.unidade'
-import { Route as DocumentoSucessoRouteImport } from './routes/documento.sucesso'
-import { Route as DocumentoRevisaoRouteImport } from './routes/documento.revisao'
-import { Route as DocumentoIplRouteImport } from './routes/documento.ipl'
-import { Route as DocumentoAdvogadoRouteImport } from './routes/documento.advogado'
-import { Route as AgendarUnidadeRouteImport } from './routes/agendar.unidade'
-import { Route as AgendarSucessoRouteImport } from './routes/agendar.sucesso'
-import { Route as AgendarRevisaoRouteImport } from './routes/agendar.revisao'
-import { Route as AgendarRegrasRouteImport } from './routes/agendar.regras'
-import { Route as AgendarIplRouteImport } from './routes/agendar.ipl'
-import { Route as AgendarHorarioRouteImport } from './routes/agendar.horario'
-import { Route as AgendarDataRouteImport } from './routes/agendar.data'
-import { Route as AgendarAdvogadoRouteImport } from './routes/agendar.advogado'
+import { Route as AdminRouteImport } from './routes/admin'
+import { Route as ConsultarRouteImport } from './routes/consultar'
+import { Route as GestaoRouteImport } from './routes/gestao'
 import { Route as AdminConviteRouteImport } from './routes/admin.convite'
+import { Route as AgendarAdvogadoRouteImport } from './routes/agendar.advogado'
+import { Route as AgendarDataRouteImport } from './routes/agendar.data'
+import { Route as AgendarHorarioRouteImport } from './routes/agendar.horario'
+import { Route as AgendarIplRouteImport } from './routes/agendar.ipl'
+import { Route as AgendarRegrasRouteImport } from './routes/agendar.regras'
+import { Route as AgendarRevisaoRouteImport } from './routes/agendar.revisao'
+import { Route as AgendarSucessoRouteImport } from './routes/agendar.sucesso'
+import { Route as AgendarUnidadeRouteImport } from './routes/agendar.unidade'
+import { Route as DocumentoAdvogadoRouteImport } from './routes/documento.advogado'
+import { Route as DocumentoIplRouteImport } from './routes/documento.ipl'
+import { Route as DocumentoRevisaoRouteImport } from './routes/documento.revisao'
+import { Route as DocumentoSucessoRouteImport } from './routes/documento.sucesso'
+import { Route as DocumentoUnidadeRouteImport } from './routes/documento.unidade'
+import { Route as DocumentoUploadRouteImport } from './routes/documento.upload'
+import { Route as AgendarServiceSlugOfferIdRouteImport } from './routes/agendar.$serviceSlug.$offerId'
 
-const GestaoRoute = GestaoRouteImport.update({
-  id: '/gestao',
-  path: '/gestao',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const ConsultarRoute = ConsultarRouteImport.update({
-  id: '/consultar',
-  path: '/consultar',
+const IndexRoute = IndexRouteImport.update({
+  id: '/',
+  path: '/',
   getParentRoute: () => rootRouteImport,
 } as any)
 const AdminRoute = AdminRouteImport.update({
@@ -44,79 +40,14 @@ const AdminRoute = AdminRouteImport.update({
   path: '/admin',
   getParentRoute: () => rootRouteImport,
 } as any)
-const IndexRoute = IndexRouteImport.update({
-  id: '/',
-  path: '/',
+const ConsultarRoute = ConsultarRouteImport.update({
+  id: '/consultar',
+  path: '/consultar',
   getParentRoute: () => rootRouteImport,
 } as any)
-const DocumentoUploadRoute = DocumentoUploadRouteImport.update({
-  id: '/documento/upload',
-  path: '/documento/upload',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const DocumentoUnidadeRoute = DocumentoUnidadeRouteImport.update({
-  id: '/documento/unidade',
-  path: '/documento/unidade',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const DocumentoSucessoRoute = DocumentoSucessoRouteImport.update({
-  id: '/documento/sucesso',
-  path: '/documento/sucesso',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const DocumentoRevisaoRoute = DocumentoRevisaoRouteImport.update({
-  id: '/documento/revisao',
-  path: '/documento/revisao',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const DocumentoIplRoute = DocumentoIplRouteImport.update({
-  id: '/documento/ipl',
-  path: '/documento/ipl',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const DocumentoAdvogadoRoute = DocumentoAdvogadoRouteImport.update({
-  id: '/documento/advogado',
-  path: '/documento/advogado',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const AgendarUnidadeRoute = AgendarUnidadeRouteImport.update({
-  id: '/agendar/unidade',
-  path: '/agendar/unidade',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const AgendarSucessoRoute = AgendarSucessoRouteImport.update({
-  id: '/agendar/sucesso',
-  path: '/agendar/sucesso',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const AgendarRevisaoRoute = AgendarRevisaoRouteImport.update({
-  id: '/agendar/revisao',
-  path: '/agendar/revisao',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const AgendarRegrasRoute = AgendarRegrasRouteImport.update({
-  id: '/agendar/regras',
-  path: '/agendar/regras',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const AgendarIplRoute = AgendarIplRouteImport.update({
-  id: '/agendar/ipl',
-  path: '/agendar/ipl',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const AgendarHorarioRoute = AgendarHorarioRouteImport.update({
-  id: '/agendar/horario',
-  path: '/agendar/horario',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const AgendarDataRoute = AgendarDataRouteImport.update({
-  id: '/agendar/data',
-  path: '/agendar/data',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const AgendarAdvogadoRoute = AgendarAdvogadoRouteImport.update({
-  id: '/agendar/advogado',
-  path: '/agendar/advogado',
+const GestaoRoute = GestaoRouteImport.update({
+  id: '/gestao',
+  path: '/gestao',
   getParentRoute: () => rootRouteImport,
 } as any)
 const AdminConviteRoute = AdminConviteRouteImport.update({
@@ -124,6 +55,82 @@ const AdminConviteRoute = AdminConviteRouteImport.update({
   path: '/convite',
   getParentRoute: () => AdminRoute,
 } as any)
+const AgendarAdvogadoRoute = AgendarAdvogadoRouteImport.update({
+  id: '/agendar/advogado',
+  path: '/agendar/advogado',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const AgendarDataRoute = AgendarDataRouteImport.update({
+  id: '/agendar/data',
+  path: '/agendar/data',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const AgendarHorarioRoute = AgendarHorarioRouteImport.update({
+  id: '/agendar/horario',
+  path: '/agendar/horario',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const AgendarIplRoute = AgendarIplRouteImport.update({
+  id: '/agendar/ipl',
+  path: '/agendar/ipl',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const AgendarRegrasRoute = AgendarRegrasRouteImport.update({
+  id: '/agendar/regras',
+  path: '/agendar/regras',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const AgendarRevisaoRoute = AgendarRevisaoRouteImport.update({
+  id: '/agendar/revisao',
+  path: '/agendar/revisao',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const AgendarSucessoRoute = AgendarSucessoRouteImport.update({
+  id: '/agendar/sucesso',
+  path: '/agendar/sucesso',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const AgendarUnidadeRoute = AgendarUnidadeRouteImport.update({
+  id: '/agendar/unidade',
+  path: '/agendar/unidade',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const DocumentoAdvogadoRoute = DocumentoAdvogadoRouteImport.update({
+  id: '/documento/advogado',
+  path: '/documento/advogado',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const DocumentoIplRoute = DocumentoIplRouteImport.update({
+  id: '/documento/ipl',
+  path: '/documento/ipl',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const DocumentoRevisaoRoute = DocumentoRevisaoRouteImport.update({
+  id: '/documento/revisao',
+  path: '/documento/revisao',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const DocumentoSucessoRoute = DocumentoSucessoRouteImport.update({
+  id: '/documento/sucesso',
+  path: '/documento/sucesso',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const DocumentoUnidadeRoute = DocumentoUnidadeRouteImport.update({
+  id: '/documento/unidade',
+  path: '/documento/unidade',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const DocumentoUploadRoute = DocumentoUploadRouteImport.update({
+  id: '/documento/upload',
+  path: '/documento/upload',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const AgendarServiceSlugOfferIdRoute =
+  AgendarServiceSlugOfferIdRouteImport.update({
+    id: '/agendar/$serviceSlug/$offerId',
+    path: '/agendar/$serviceSlug/$offerId',
+    getParentRoute: () => rootRouteImport,
+  } as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
@@ -145,6 +152,7 @@ export interface FileRoutesByFullPath {
   '/documento/sucesso': typeof DocumentoSucessoRoute
   '/documento/unidade': typeof DocumentoUnidadeRoute
   '/documento/upload': typeof DocumentoUploadRoute
+  '/agendar/$serviceSlug/$offerId': typeof AgendarServiceSlugOfferIdRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
@@ -166,6 +174,7 @@ export interface FileRoutesByTo {
   '/documento/sucesso': typeof DocumentoSucessoRoute
   '/documento/unidade': typeof DocumentoUnidadeRoute
   '/documento/upload': typeof DocumentoUploadRoute
+  '/agendar/$serviceSlug/$offerId': typeof AgendarServiceSlugOfferIdRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -188,6 +197,7 @@ export interface FileRoutesById {
   '/documento/sucesso': typeof DocumentoSucessoRoute
   '/documento/unidade': typeof DocumentoUnidadeRoute
   '/documento/upload': typeof DocumentoUploadRoute
+  '/agendar/$serviceSlug/$offerId': typeof AgendarServiceSlugOfferIdRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -211,6 +221,7 @@ export interface FileRouteTypes {
     | '/documento/sucesso'
     | '/documento/unidade'
     | '/documento/upload'
+    | '/agendar/$serviceSlug/$offerId'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
@@ -232,6 +243,7 @@ export interface FileRouteTypes {
     | '/documento/sucesso'
     | '/documento/unidade'
     | '/documento/upload'
+    | '/agendar/$serviceSlug/$offerId'
   id:
     | '__root__'
     | '/'
@@ -253,6 +265,7 @@ export interface FileRouteTypes {
     | '/documento/sucesso'
     | '/documento/unidade'
     | '/documento/upload'
+    | '/agendar/$serviceSlug/$offerId'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -274,22 +287,16 @@ export interface RootRouteChildren {
   DocumentoSucessoRoute: typeof DocumentoSucessoRoute
   DocumentoUnidadeRoute: typeof DocumentoUnidadeRoute
   DocumentoUploadRoute: typeof DocumentoUploadRoute
+  AgendarServiceSlugOfferIdRoute: typeof AgendarServiceSlugOfferIdRoute
 }
 
 declare module '@tanstack/react-router' {
   interface FileRoutesByPath {
-    '/gestao': {
-      id: '/gestao'
-      path: '/gestao'
-      fullPath: '/gestao'
-      preLoaderRoute: typeof GestaoRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/consultar': {
-      id: '/consultar'
-      path: '/consultar'
-      fullPath: '/consultar'
-      preLoaderRoute: typeof ConsultarRouteImport
+    '/': {
+      id: '/'
+      path: '/'
+      fullPath: '/'
+      preLoaderRoute: typeof IndexRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/admin': {
@@ -299,95 +306,32 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AdminRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/': {
-      id: '/'
-      path: '/'
-      fullPath: '/'
-      preLoaderRoute: typeof IndexRouteImport
+    '/consultar': {
+      id: '/consultar'
+      path: '/consultar'
+      fullPath: '/consultar'
+      preLoaderRoute: typeof ConsultarRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/documento/upload': {
-      id: '/documento/upload'
-      path: '/documento/upload'
-      fullPath: '/documento/upload'
-      preLoaderRoute: typeof DocumentoUploadRouteImport
+    '/gestao': {
+      id: '/gestao'
+      path: '/gestao'
+      fullPath: '/gestao'
+      preLoaderRoute: typeof GestaoRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/documento/unidade': {
-      id: '/documento/unidade'
-      path: '/documento/unidade'
-      fullPath: '/documento/unidade'
-      preLoaderRoute: typeof DocumentoUnidadeRouteImport
-      parentRoute: typeof rootRouteImport
+    '/admin/convite': {
+      id: '/admin/convite'
+      path: '/convite'
+      fullPath: '/admin/convite'
+      preLoaderRoute: typeof AdminConviteRouteImport
+      parentRoute: typeof AdminRoute
     }
-    '/documento/sucesso': {
-      id: '/documento/sucesso'
-      path: '/documento/sucesso'
-      fullPath: '/documento/sucesso'
-      preLoaderRoute: typeof DocumentoSucessoRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/documento/revisao': {
-      id: '/documento/revisao'
-      path: '/documento/revisao'
-      fullPath: '/documento/revisao'
-      preLoaderRoute: typeof DocumentoRevisaoRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/documento/ipl': {
-      id: '/documento/ipl'
-      path: '/documento/ipl'
-      fullPath: '/documento/ipl'
-      preLoaderRoute: typeof DocumentoIplRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/documento/advogado': {
-      id: '/documento/advogado'
-      path: '/documento/advogado'
-      fullPath: '/documento/advogado'
-      preLoaderRoute: typeof DocumentoAdvogadoRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/agendar/unidade': {
-      id: '/agendar/unidade'
-      path: '/agendar/unidade'
-      fullPath: '/agendar/unidade'
-      preLoaderRoute: typeof AgendarUnidadeRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/agendar/sucesso': {
-      id: '/agendar/sucesso'
-      path: '/agendar/sucesso'
-      fullPath: '/agendar/sucesso'
-      preLoaderRoute: typeof AgendarSucessoRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/agendar/revisao': {
-      id: '/agendar/revisao'
-      path: '/agendar/revisao'
-      fullPath: '/agendar/revisao'
-      preLoaderRoute: typeof AgendarRevisaoRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/agendar/regras': {
-      id: '/agendar/regras'
-      path: '/agendar/regras'
-      fullPath: '/agendar/regras'
-      preLoaderRoute: typeof AgendarRegrasRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/agendar/ipl': {
-      id: '/agendar/ipl'
-      path: '/agendar/ipl'
-      fullPath: '/agendar/ipl'
-      preLoaderRoute: typeof AgendarIplRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/agendar/horario': {
-      id: '/agendar/horario'
-      path: '/agendar/horario'
-      fullPath: '/agendar/horario'
-      preLoaderRoute: typeof AgendarHorarioRouteImport
+    '/agendar/advogado': {
+      id: '/agendar/advogado'
+      path: '/agendar/advogado'
+      fullPath: '/agendar/advogado'
+      preLoaderRoute: typeof AgendarAdvogadoRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/agendar/data': {
@@ -397,19 +341,96 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AgendarDataRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/agendar/advogado': {
-      id: '/agendar/advogado'
-      path: '/agendar/advogado'
-      fullPath: '/agendar/advogado'
-      preLoaderRoute: typeof AgendarAdvogadoRouteImport
+    '/agendar/horario': {
+      id: '/agendar/horario'
+      path: '/agendar/horario'
+      fullPath: '/agendar/horario'
+      preLoaderRoute: typeof AgendarHorarioRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/admin/convite': {
-      id: '/admin/convite'
-      path: '/convite'
-      fullPath: '/admin/convite'
-      preLoaderRoute: typeof AdminConviteRouteImport
-      parentRoute: typeof AdminRoute
+    '/agendar/ipl': {
+      id: '/agendar/ipl'
+      path: '/agendar/ipl'
+      fullPath: '/agendar/ipl'
+      preLoaderRoute: typeof AgendarIplRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/agendar/regras': {
+      id: '/agendar/regras'
+      path: '/agendar/regras'
+      fullPath: '/agendar/regras'
+      preLoaderRoute: typeof AgendarRegrasRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/agendar/revisao': {
+      id: '/agendar/revisao'
+      path: '/agendar/revisao'
+      fullPath: '/agendar/revisao'
+      preLoaderRoute: typeof AgendarRevisaoRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/agendar/sucesso': {
+      id: '/agendar/sucesso'
+      path: '/agendar/sucesso'
+      fullPath: '/agendar/sucesso'
+      preLoaderRoute: typeof AgendarSucessoRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/agendar/unidade': {
+      id: '/agendar/unidade'
+      path: '/agendar/unidade'
+      fullPath: '/agendar/unidade'
+      preLoaderRoute: typeof AgendarUnidadeRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/documento/advogado': {
+      id: '/documento/advogado'
+      path: '/documento/advogado'
+      fullPath: '/documento/advogado'
+      preLoaderRoute: typeof DocumentoAdvogadoRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/documento/ipl': {
+      id: '/documento/ipl'
+      path: '/documento/ipl'
+      fullPath: '/documento/ipl'
+      preLoaderRoute: typeof DocumentoIplRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/documento/revisao': {
+      id: '/documento/revisao'
+      path: '/documento/revisao'
+      fullPath: '/documento/revisao'
+      preLoaderRoute: typeof DocumentoRevisaoRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/documento/sucesso': {
+      id: '/documento/sucesso'
+      path: '/documento/sucesso'
+      fullPath: '/documento/sucesso'
+      preLoaderRoute: typeof DocumentoSucessoRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/documento/unidade': {
+      id: '/documento/unidade'
+      path: '/documento/unidade'
+      fullPath: '/documento/unidade'
+      preLoaderRoute: typeof DocumentoUnidadeRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/documento/upload': {
+      id: '/documento/upload'
+      path: '/documento/upload'
+      fullPath: '/documento/upload'
+      preLoaderRoute: typeof DocumentoUploadRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/agendar/$serviceSlug/$offerId': {
+      id: '/agendar/$serviceSlug/$offerId'
+      path: '/agendar/$serviceSlug/$offerId'
+      fullPath: '/agendar/$serviceSlug/$offerId'
+      preLoaderRoute: typeof AgendarServiceSlugOfferIdRouteImport
+      parentRoute: typeof rootRouteImport
     }
   }
 }
@@ -443,6 +464,7 @@ const rootRouteChildren: RootRouteChildren = {
   DocumentoSucessoRoute: DocumentoSucessoRoute,
   DocumentoUnidadeRoute: DocumentoUnidadeRoute,
   DocumentoUploadRoute: DocumentoUploadRoute,
+  AgendarServiceSlugOfferIdRoute: AgendarServiceSlugOfferIdRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)
@@ -457,4 +479,3 @@ declare module '@tanstack/react-start' {
     config: Awaited<ReturnType<typeof startInstance.getOptions>>
   }
 }
-

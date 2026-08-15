@@ -54,6 +54,11 @@ import {
   obterCatalogoAgendamentosPublicoApi,
 } from 'backend/adminApi';
 
+import {
+  criarAgendamentoPublicoV2,
+  listarDisponibilidadeOfertaPublica,
+} from 'backend/agendamentosPublicosStore';
+
 import { confirmarSolicitacaoDocumento } from 'backend/documentos';
 
 import {
@@ -4500,43 +4505,51 @@ function gerarDatasCandidatasAgenda(datasBase = []) {
 }
 
 async function carregarDatasNormalizadas(unidadeSlug) {
-  const resultado = await chamarListarDatasDisponiveis(unidadeSlug);
-  const datasBase = extrairDatas(resultado)
-    .map(mapDataDisponivel)
-    .filter((data) => !!data.id && !!data.dataIso)
-    .filter((data) => data.encerrado !== true && data.disponivel !== false);
+  const unidade = await buscarUnidadePorSlug(unidadeSlug);
+  if (!unidade) return [];
 
   const bloqueios = await carregarBloqueiosAtivosAgenda(unidadeSlug);
-  const candidatas = gerarDatasCandidatasAgenda(datasBase);
+  const candidatas = gerarDatasCandidatasAgenda([])
+    .filter((data) => data.encerrado !== true && data.disponivel !== false)
+    .filter((data) => !dataTotalmenteBloqueadaAgenda(bloqueios, data.dataIso));
+
   const datas = [];
+  const TAMANHO_LOTE_DATAS = 4;
 
-  for (const data of candidatas) {
+  for (let inicio = 0; inicio < candidatas.length; inicio += TAMANHO_LOTE_DATAS) {
     if (datas.length >= MAX_DATAS_AGENDAMENTO) break;
-    if (data.encerrado === true || data.disponivel === false) continue;
-    if (dataTotalmenteBloqueadaAgenda(bloqueios, data.dataIso)) continue;
 
-    let horarios = [];
-    try {
-      horarios = await carregarHorariosNormalizados(unidadeSlug, data.dataIso, { bloqueios });
-    } catch (err) {
-      console.warn('Não foi possível validar horários para a data candidata.', data.dataIso, err);
-      continue;
-    }
+    const lote = candidatas.slice(inicio, inicio + TAMANHO_LOTE_DATAS);
+    const resultados = await Promise.all(
+      lote.map(async (data) => {
+        try {
+          const horarios = await carregarHorariosNormalizados(unidadeSlug, data.dataIso, { bloqueios });
+          if (!horarios.length) return null;
 
-    if (horarios.length > 0) {
-      datas.push({
-        ...data,
-        id: data.dataIso,
-        label: data.label || formatDateLabel(data.dataIso),
-        diaSemana: data.diaSemana || formatWeekday(data.dataIso),
-        diaMes: data.diaMes || formatDayMonth(data.dataIso),
-        disponivel: true,
-        encerrado: false,
-      });
+          return {
+            ...data,
+            id: data.dataIso,
+            label: data.label || formatDateLabel(data.dataIso),
+            diaSemana: data.diaSemana || formatWeekday(data.dataIso),
+            diaMes: data.diaMes || formatDayMonth(data.dataIso),
+            disponivel: true,
+            encerrado: false,
+          };
+        } catch (err) {
+          console.warn('Não foi possível validar horários para a data candidata.', data.dataIso, err);
+          return null;
+        }
+      })
+    );
+
+    for (const resultado of resultados) {
+      if (!resultado) continue;
+      datas.push(resultado);
+      if (datas.length >= MAX_DATAS_AGENDAMENTO) break;
     }
   }
 
-  return datas;
+  return datas.slice(0, MAX_DATAS_AGENDAMENTO);
 }
 
 async function carregarHorariosNormalizados(unidadeSlug, dataIso, options = {}) {
@@ -5358,6 +5371,106 @@ function montarNomeArquivoUpload(nomeOriginal, mimeType) {
   const token = gerarUploadToken();
 
   return `${yyyy}${mm}${dd}-${hh}${mi}${ss}-${token}-${base}.${ext}`;
+}
+
+function normalizarPayloadUploadUrlDocumento(payload = {}) {
+  const nomeOriginal = text(
+    payload.fileName ||
+      payload.nomeArquivo ||
+      payload.arquivoNome ||
+      payload.arquivoPrincipalNome ||
+      payload.name
+  );
+
+  const mimeType = text(
+    payload.mimeType ||
+      payload.contentType ||
+      payload.tipoMime ||
+      inferMimeTypeFromFileName(nomeOriginal)
+  ).toLowerCase();
+
+  const tamanhoBytes = Number(payload.sizeInBytes || payload.tamanhoBytes || payload.size || 0);
+
+  return {
+    nomeOriginal,
+    mimeType,
+    tamanhoBytes: Number.isFinite(tamanhoBytes) ? Math.max(0, Math.trunc(tamanhoBytes)) : 0,
+  };
+}
+
+function validarUploadUrlDocumento(dados) {
+  const erros = [];
+  const config = getMimeConfig(dados.mimeType);
+  const ext = getFileExtension(dados.nomeOriginal);
+
+  if (!dados.nomeOriginal) {
+    erros.push('Nome do arquivo não informado.');
+  }
+
+  if (!dados.mimeType) {
+    erros.push('Tipo do arquivo não informado.');
+  } else if (!config) {
+    erros.push('Formato não permitido. Envie PDF, JPG ou PNG.');
+  }
+
+  if (config && ext && !config.extensions.includes(ext)) {
+    erros.push('A extensão do arquivo não corresponde ao tipo informado.');
+  }
+
+  if (!dados.tamanhoBytes || dados.tamanhoBytes < 1) {
+    erros.push('Tamanho do arquivo não informado.');
+  } else if (dados.tamanhoBytes > MAX_DOCUMENT_UPLOAD_BYTES) {
+    erros.push('Arquivo maior que 8 MB.');
+  }
+
+  if (erros.length) {
+    return {
+      ok: false,
+      codigo: 'UPLOAD_INVALIDO',
+      mensagem: erros.join('\n'),
+    };
+  }
+
+  return { ok: true };
+}
+
+async function prepararUploadDocumentoDireto(dados) {
+  const config = getMimeConfig(dados.mimeType);
+  const fileName = montarNomeArquivoUpload(dados.nomeOriginal, dados.mimeType);
+
+  const options = {
+    mediaOptions: {
+      mimeType: dados.mimeType,
+      mediaType: config.mediaType,
+    },
+    metadataOptions: {
+      isPrivate: false,
+      isVisitorUpload: true,
+      context: {
+        origem: 'central-oabjf',
+        fluxo: 'documentos',
+        nomeOriginal: dados.nomeOriginal,
+      },
+    },
+  };
+
+  const result = await mediaManager.getUploadUrl(DOCUMENT_UPLOAD_FOLDER, options);
+  const uploadUrl = text(result && result.uploadUrl);
+
+  if (!uploadUrl) {
+    return {
+      ok: false,
+      codigo: 'UPLOAD_URL_AUSENTE',
+      mensagem: 'O Wix não retornou uma URL para envio do arquivo.',
+    };
+  }
+
+  return {
+    ok: true,
+    uploadUrl,
+    fileName,
+    mimeType: dados.mimeType,
+  };
 }
 
 function normalizarPayloadUploadDocumento(payload = {}) {
@@ -7208,6 +7321,103 @@ export async function use_oabAgendamentoCatalogo(request) {
 }
 
 
+export async function use_oabAgendamentoDisponibilidade(request) {
+  try {
+    if (isOptions(request)) {
+      return jsonOk(request, { ok: true, method: 'OPTIONS' });
+    }
+
+    if (!isGet(request)) {
+      return jsonBadRequest(request, {
+        ok: false,
+        mensagem: 'Método não permitido para este endpoint.',
+      });
+    }
+
+    const offerId = getQueryParam(request, ['offerId', 'ofertaId', 'oferta']);
+    const dataIso = normalizeDateIso(
+      getQueryParam(request, ['dataIso', 'data', 'date'])
+    );
+
+    if (!offerId) {
+      return jsonBadRequest(request, {
+        ok: false,
+        codigo: 'OFERTA_OBRIGATORIA',
+        mensagem: 'Informe a opção de atendimento.',
+      });
+    }
+
+    const resultado = await listarDisponibilidadeOfertaPublica({
+      offerId,
+      dataIso,
+    });
+
+    return jsonOk(request, {
+      ok: true,
+      ...resultado,
+    });
+  } catch (err) {
+    console.error('Erro no endpoint oabAgendamentoDisponibilidade:', err);
+    const codigo = text(err && err.message);
+    const indisponivel = [
+      'OFERTA_INEXISTENTE',
+      'SERVICO_INDISPONIVEL',
+      'LOCAL_INDISPONIVEL',
+      'ITEM_INDISPONIVEL',
+      'OPCAO_INDISPONIVEL',
+      'OPCAO_NAO_PRONTA',
+    ].includes(codigo);
+
+    if (indisponivel) {
+      return jsonBadRequest(request, {
+        ok: false,
+        codigo,
+        mensagem: 'Esta opção de atendimento não está disponível para reserva.',
+      });
+    }
+
+    return jsonServerError(request, {
+      ok: false,
+      codigo: 'ERRO_INTERNO',
+      mensagem: 'Não foi possível carregar a disponibilidade agora.',
+    });
+  }
+}
+
+export async function use_oabAgendamentosV2(request) {
+  try {
+    if (isOptions(request)) {
+      return jsonOk(request, { ok: true, method: 'OPTIONS' });
+    }
+
+    if (!isPost(request)) {
+      return jsonBadRequest(request, {
+        ok: false,
+        mensagem: 'Método não permitido para este endpoint.',
+      });
+    }
+
+    const payload = await readJsonBody(request);
+    const resultado = await criarAgendamentoPublicoV2(payload);
+
+    if (resultado.ok) return jsonOk(request, resultado);
+
+    return jsonBadRequest(request, {
+      ok: false,
+      codigo: resultado.code || resultado.codigo || 'DADOS_INVALIDOS',
+      mensagem: resultado.message || resultado.mensagem || 'Não foi possível confirmar o agendamento.',
+    });
+  } catch (err) {
+    console.error('Erro no endpoint oabAgendamentosV2:', err);
+    return jsonServerError(request, {
+      ok: false,
+      codigo: 'ERRO_INTERNO',
+      mensagem: 'Não foi possível confirmar o agendamento agora.',
+    });
+  }
+}
+
+
 export async function use_oabUnidades(request) {
   try {
     if (isOptions(request)) {
@@ -7682,6 +7892,54 @@ export async function use_oabRemarcarAgendamentoUsuario(request) {
     return jsonServerError(request, {
       ok: false,
       mensagem: 'Não foi possível remarcar o agendamento agora.',
+    });
+  }
+}
+
+/**
+ * POST /_functions/oabDocumentoUploadUrl
+ *
+ * Gera uma URL assinada de uso único para a Central enviar o arquivo
+ * diretamente ao Wix Media Manager, sem transportar Base64 pelo Velo.
+ */
+export async function use_oabDocumentoUploadUrl(request) {
+  try {
+    if (isOptions(request)) {
+      return jsonOk(request, {
+        ok: true,
+        method: 'OPTIONS',
+      });
+    }
+
+    if (!isPost(request)) {
+      return jsonBadRequest(request, {
+        ok: false,
+        mensagem: 'Método não permitido para este endpoint.',
+      });
+    }
+
+    const payload = await readJsonBody(request);
+    const dados = normalizarPayloadUploadUrlDocumento(payload);
+    const validacao = validarUploadUrlDocumento(dados);
+
+    if (!validacao.ok) {
+      return jsonBadRequest(request, validacao);
+    }
+
+    const resultado = await prepararUploadDocumentoDireto(dados);
+
+    if (resultado.ok) {
+      return jsonOk(request, resultado);
+    }
+
+    return jsonServerError(request, resultado);
+  } catch (err) {
+    console.error('Erro no endpoint oabDocumentoUploadUrl:', err);
+
+    return jsonServerError(request, {
+      ok: false,
+      codigo: 'ERRO_INTERNO_UPLOAD_URL',
+      mensagem: 'Não foi possível preparar o envio do arquivo agora.',
     });
   }
 }

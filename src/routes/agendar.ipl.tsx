@@ -50,8 +50,8 @@ function Page() {
           error={show(eIpl)}
         />
         <Field label="INFOPEN (opcional)" value={infopen} onChange={setInfopen} placeholder="Ex.: 1234567" mask="infopen" error={show(eInfo)} />
-        <div className="flex items-start gap-3 rounded-xl border bg-muted/40 p-4 text-xs leading-relaxed text-muted-foreground">
-          <Info className="mt-0.5 h-4 w-4 shrink-0 text-primary" />
+        <div className="public-note">
+          <Info className="public-note__icon" aria-hidden />
           O INFOPEN é opcional. Preencha apenas se souber.
         </div>
       </div>

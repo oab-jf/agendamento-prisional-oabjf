@@ -97,7 +97,7 @@ export function Field({ label, value, onChange, type = "text", placeholder, requ
           }
         }}
         className={
-          "h-12 w-full rounded-xl border bg-background px-4 text-base text-foreground placeholder:text-muted-foreground/60 focus:outline-none focus:ring-2 focus:ring-primary disabled:cursor-not-allowed disabled:bg-muted disabled:text-muted-foreground " +
+          "h-12 w-full rounded-sm border bg-background px-4 text-base text-foreground placeholder:text-muted-foreground/60 focus:outline-none focus:ring-2 focus:ring-brand-red/35 disabled:cursor-not-allowed disabled:bg-muted disabled:text-muted-foreground " +
           (error ? "border-destructive" : "border-input")
         }
       />

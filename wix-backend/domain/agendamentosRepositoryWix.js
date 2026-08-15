@@ -8,7 +8,6 @@
 
 import {
   APPOINTMENT_STATUS,
-  MODALITY_IDS,
   normalizeAppointmentRecord,
 } from "./agendamentosCore.js";
 import {
@@ -24,7 +23,6 @@ export const WIX_APPOINTMENTS_REPOSITORY_DEFAULTS = Object.freeze({
   suppressAuth: true,
 });
 
-const KNOWN_MODALITY_IDS = Object.freeze(Object.values(MODALITY_IDS));
 const KNOWN_STATUSES = Object.freeze(Object.values(APPOINTMENT_STATUS));
 const SORT_FIELDS = Object.freeze([
   "dataAtendimentoIso",
@@ -173,12 +171,9 @@ function buildSchemaV2Query({
 }) {
   let built = createQuery(wixData, collectionId).ge("schemaVersion", 2);
 
-  const modalities =
-    branch.filters.modalityIds.length > 0
-      ? branch.filters.modalityIds
-      : KNOWN_MODALITY_IDS;
-
-  built = built.hasSome("modalidadeId", modalities);
+  if (branch.filters.modalityIds.length > 0) {
+    built = built.hasSome("modalidadeId", branch.filters.modalityIds);
+  }
 
   if (branch.filters.resourceIds.length > 0) {
     built = built.hasSome("recursoId", branch.filters.resourceIds);

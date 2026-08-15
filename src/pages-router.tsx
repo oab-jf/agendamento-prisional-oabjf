@@ -14,6 +14,7 @@ import { Route as AgendarAdvogadoRoute } from "./routes/agendar.advogado";
 import { Route as AgendarIplRoute } from "./routes/agendar.ipl";
 import { Route as AgendarRevisaoRoute } from "./routes/agendar.revisao";
 import { Route as AgendarSucessoRoute } from "./routes/agendar.sucesso";
+import { Route as AgendarMultimodalRoute } from "./routes/agendar.$serviceSlug.$offerId";
 
 import { Route as DocumentoUnidadeRoute } from "./routes/documento.unidade";
 import { Route as DocumentoAdvogadoRoute } from "./routes/documento.advogado";
@@ -38,7 +39,7 @@ function pick(route: RouteObject) {
   return { Component, beforeLoad };
 }
 
-const routes = [
+const routes: Array<{ path?: string; pattern?: RegExp; Component?: ComponentType; beforeLoad?: () => unknown }> = [
   { path: "/", ...pick(IndexRoute as RouteObject) },
   { path: "/admin", ...pick(AdminRoute as RouteObject) },
   { path: "/admin/convite", ...pick(AdminConviteRoute as RouteObject) },
@@ -50,6 +51,7 @@ const routes = [
   { path: "/agendar/ipl", ...pick(AgendarIplRoute as RouteObject) },
   { path: "/agendar/revisao", ...pick(AgendarRevisaoRoute as RouteObject) },
   { path: "/agendar/sucesso", ...pick(AgendarSucessoRoute as RouteObject) },
+  { pattern: /^\/agendar\/[^/]+\/[^/]+$/, ...pick(AgendarMultimodalRoute as RouteObject) },
   { path: "/documento/unidade", ...pick(DocumentoUnidadeRoute as RouteObject) },
   { path: "/documento/advogado", ...pick(DocumentoAdvogadoRoute as RouteObject) },
   { path: "/documento/ipl", ...pick(DocumentoIplRoute as RouteObject) },
@@ -111,7 +113,7 @@ function RouteRenderer({ match }: { match: (typeof routes)[number] }) {
 export function PagesRouter() {
   const location = useLocation();
   const pathname = normalizePath(location.pathname);
-  const match = routes.find((r) => r.path === pathname);
+  const match = routes.find((r) => r.path === pathname || r.pattern?.test(pathname));
   if (!match) return <NotFoundPage />;
   return <RouteRenderer key={pathname} match={match} />;
 }
