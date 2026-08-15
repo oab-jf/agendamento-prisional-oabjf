@@ -75,6 +75,17 @@ test("HTTP público expõe disponibilidade e criação v2 sem substituir o endpo
   assert.match(httpFunctions, /export async function use_oabAgendamentos\(/);
 });
 
+test("endpoint encaminha data selecionada para o contrato dateIso do store", () => {
+  assert.match(
+    httpFunctions,
+    /listarDisponibilidadeOfertaPublica\(\{\s*offerId,\s*dateIso:\s*dataIso,\s*\}\)/,
+  );
+  assert.match(
+    store,
+    /listarDisponibilidadeOfertaPublica\(\{ offerId, dateIso = ""/,
+  );
+});
+
 
 test("store multimodal usa coleção técnica de ocupação e lock por vaga", () => {
   assert.match(store, /const OCCUPANCY_COLLECTION = "AgendamentoOcupacoes"/);
@@ -94,6 +105,18 @@ test("cancelamento e remarcação públicos reconhecem agendamento schema v2", (
 });
 
 
+test("agenda administrativa preserva contexto multimodal de registros v2", () => {
+  assert.match(adminApi, /function mapAgendamentoAdmin\(item\)/);
+  assert.match(adminApi, /schemaVersion: isV2 \? 2 : 1/);
+  assert.match(adminApi, /modalidadeId: text\(item\.modalidadeId\)/);
+  assert.match(adminApi, /modalidadeNome: text\(item\.modalidadeNome\)/);
+  assert.match(adminApi, /ofertaNome: text\(item\.ofertaNome\)/);
+  assert.match(adminApi, /localNome: text\(item\.localNome\)/);
+  assert.match(adminApi, /recursoNome: text\(item\.recursoNome\)/);
+  assert.match(adminApi, /nomeAdvogado: solicitanteNome/);
+});
+
+
 test("cliente público possui jornada dinâmica e consulta disponibilidade da oferta", () => {
   assert.match(apiClient, /export async function listarDisponibilidadeOferta/);
   assert.match(apiClient, /export async function confirmarAgendamentoV2/);
@@ -109,6 +132,14 @@ test("consulta/remarcação pública reutiliza a agenda multimodal e mantém con
   assert.match(consultRoute, /label="Unidade prisional"/);
   assert.match(consultRoute, /label="Serviço"/);
   assert.match(consultRoute, /isGeneric \? "Atendimento" : "Unidade"/);
+});
+
+test("resultado da consulta importa PageTitle antes de renderizar o detalhe", () => {
+  assert.match(
+    consultRoute,
+    /import \{ MobileShell, PageTitle \} from "@\/components\/MobileShell";/,
+  );
+  assert.match(consultRoute, /<PageTitle/);
 });
 
 

@@ -7349,7 +7349,7 @@ export async function use_oabAgendamentoDisponibilidade(request) {
 
     const resultado = await listarDisponibilidadeOfertaPublica({
       offerId,
-      dataIso,
+      dateIso: dataIso,
     });
 
     return jsonOk(request, {

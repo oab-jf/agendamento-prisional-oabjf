@@ -9,7 +9,7 @@ import {
   XCircle,
   CalendarClock,
 } from "lucide-react";
-import { MobileShell } from "@/components/MobileShell";
+import { MobileShell, PageTitle } from "@/components/MobileShell";
 import { Field } from "@/components/Field";
 import { emailError } from "@/lib/validators";
 import {

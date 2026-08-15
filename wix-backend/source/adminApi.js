@@ -5894,10 +5894,28 @@ function mapAgendamentoAdmin(item) {
     addMinutesToTime(horarioInicio, 30);
 
   const status = text(item.status || 'agendado').toLowerCase() || 'agendado';
+  const isV2 = Number(item.schemaVersion || 0) >= 2 && Boolean(text(item.modalidadeId));
+  const solicitanteNome = text(item.solicitanteNome || item.nomeAdvogado);
+  const solicitanteOab = text(item.solicitanteOab || item.numeroOab);
+  const solicitanteEmail = text(item.solicitanteEmail || item.emailAdvogado || item.emailIndex);
+  const solicitanteTelefone = text(item.solicitanteTelefone || item.telefoneAdvogado);
 
   return {
     _id: item._id,
     protocolo: text(item.protocolo || item.title),
+
+    schemaVersion: isV2 ? 2 : 1,
+    modalidadeId: text(item.modalidadeId),
+    modalidadeFamiliaId: text(item.modalidadeFamiliaId),
+    modalidadeNome: text(item.modalidadeNome),
+    servicoNome: text(item.modalidadeNome),
+    ofertaId: text(item.ofertaId),
+    ofertaNome: text(item.ofertaNome),
+    localId: text(item.localId),
+    localNome: text(item.localNome),
+    localEndereco: text(item.localEndereco),
+    recursoId: text(item.recursoId),
+    recursoNome: text(item.recursoNome),
 
     unidadeSlug: text(item.unidadeSlug),
     unidadeNome: text(item.unidadeNome),
@@ -5912,10 +5930,11 @@ function mapAgendamentoAdmin(item) {
         ? `${horarioInicio} – ${horarioFim}`
         : horarioInicio,
 
-    nomeAdvogado: text(item.nomeAdvogado),
-    numeroOab: text(item.numeroOab),
-    emailAdvogado: text(item.emailAdvogado),
-    telefoneAdvogado: text(item.telefoneAdvogado),
+    solicitanteNome,
+    nomeAdvogado: solicitanteNome,
+    numeroOab: solicitanteOab,
+    emailAdvogado: solicitanteEmail,
+    telefoneAdvogado: solicitanteTelefone,
 
     nomeIpl: text(item.nomeIpl),
     infopen: text(item.infopen),
