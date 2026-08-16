@@ -1,6 +1,8 @@
 import wixData from 'wix-data';
 import { getSecret } from 'wix-secrets-backend';
 import { fetch } from 'wix-fetch';
+import { elevate } from 'wix-auth';
+import { orders } from 'wix-events.v2';
 
 import {
   listarHorariosDisponiveis,
@@ -58,6 +60,7 @@ const INFOBIP_EMAIL_ENDPOINT = '/email/3/send';
 const CENTRAL_PUBLIC_URL = 'https://central.juizdefora-oabmg.org.br';
 const LEGACY_ADMIN_ID = 'legacy-secret-admin';
 const AGENDAMENTOS_SHADOW_READ_ENABLED = true;
+const obterResumoVendasEventoElevado = elevate(orders.getSummary);
 
 const ADMIN_PERMISSIONS = {
   AGENDAMENTOS_VER: 'agendamentos.ver',
@@ -83,6 +86,9 @@ const ADMIN_PERMISSIONS = {
   FORMULARIOS_OPERAR: 'formularios.operar',
   FORMULARIOS_ANEXOS: 'formularios.anexos',
 
+  EVENTOS_VER: 'eventos.ver',
+  EVENTOS_FINANCEIRO: 'eventos.financeiro',
+
   USUARIOS_VER: 'usuarios.ver',
   USUARIOS_CRIAR: 'usuarios.criar',
   USUARIOS_EDITAR: 'usuarios.editar',
@@ -94,7 +100,7 @@ const ADMIN_PERMISSIONS = {
 };
 
 const ALL_ADMIN_PERMISSIONS = Object.keys(ADMIN_PERMISSIONS).map((key) => ADMIN_PERMISSIONS[key]);
-const ADMIN_PERMISSIONS_SCHEMA_VERSION = 3;
+const ADMIN_PERMISSIONS_SCHEMA_VERSION = 4;
 const USUARIOS_CRITICOS_PERMISSAO = ADMIN_PERMISSIONS.USUARIOS_EDITAR;
 
 export async function loginAdminApi(payload = {}) {
@@ -3172,6 +3178,247 @@ export async function reenviarListaAdminApi(payload = {}, tokenRecebido = '') {
   }
 }
 
+
+function eventoAdminNumero(value) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function eventoAdminDinheiro(value) {
+  const item = value && typeof value === 'object' ? value : {};
+  const amount = eventoAdminNumero(item.value ?? item.amount);
+  return {
+    currency: text(item.currency || 'BRL') || 'BRL',
+    value: amount,
+  };
+}
+
+function normalizarResumoFinanceiroEvento(resultado) {
+  const sales = Array.isArray(resultado?.sales) ? resultado.sales : [];
+
+  return sales.map((sale) => {
+    const total = eventoAdminDinheiro(sale?.total);
+    const revenue = eventoAdminDinheiro(sale?.revenue);
+    const currency = total.currency || revenue.currency || 'BRL';
+
+    return {
+      currency,
+      ticketsSold: eventoAdminNumero(sale?.totalTickets),
+      totalOrders: eventoAdminNumero(sale?.totalOrders),
+      totalSales: total.value,
+      revenue: revenue.value,
+      salesRevenueDifference: Math.max(0, total.value - revenue.value),
+    };
+  });
+}
+
+function mapEventoAdmin(item, financeiro = null, financeiroPermitido = false) {
+  const tipo = text(item?.type).toUpperCase();
+  const startIso = dateTimeToIso(item?.start);
+  const endIso = dateTimeToIso(item?.end);
+
+  return {
+    id: text(item?._id || item?.id),
+    title: text(item?.title) || 'Evento sem título',
+    slug: text(item?.slug),
+    status: text(item?.status).toUpperCase(),
+    registrationStatus: text(item?.registrationStatus).toUpperCase(),
+    type: tipo || 'NONE',
+    isTicketed: tipo === 'TICKETS',
+    startDate: startIso,
+    endDate: endIso,
+    dateLabel: text(item?.scheduleFormatted || item?.scheduleStartDateFormatted),
+    locationName: text(item?.locationName),
+    locationAddress: text(item?.locationAddress),
+    publicUrl: text(item?.registrationUrl),
+    lowestPriceFormatted: text(item?.lowestPriceFormatted),
+    highestPriceFormatted: text(item?.highestPriceFormatted),
+    financeiroPermitido: financeiroPermitido === true,
+    financeiro,
+  };
+}
+
+async function obterFinanceiroEventoAdmin(eventId) {
+  const id = text(eventId);
+  if (!id) return [];
+
+  try {
+    const resultado = await obterResumoVendasEventoElevado({ eventId: id });
+    return normalizarResumoFinanceiroEvento(resultado);
+  } catch (err) {
+    console.warn('Não foi possível obter o resumo financeiro do evento.', {
+      eventId: id,
+      message: normalizarMensagemErroApi(err),
+    });
+    return null;
+  }
+}
+
+async function listarEventosAdminRaw() {
+  const batchSize = 100;
+  const items = [];
+  let offset = 0;
+  let totalCount = 0;
+
+  do {
+    const result = await wixData
+      .query('Events/Events')
+      .descending('start')
+      .skip(offset)
+      .limit(batchSize)
+      .find({ suppressAuth: true });
+
+    const batch = Array.isArray(result?.items) ? result.items : [];
+    totalCount = Number(result?.totalCount) || batch.length;
+    items.push(...batch);
+    offset += batch.length;
+
+    if (!batch.length || batch.length < batchSize) break;
+  } while (offset < totalCount);
+
+  return items;
+}
+
+function eventoAdminMatchesFiltros(item, { busca = '', tipo = '', status = '' } = {}) {
+  const itemTipo = text(item?.type).toUpperCase();
+  const itemStatus = text(item?.status).toUpperCase();
+  const title = normalizeSearch(item?.title);
+
+  if (busca && !title.includes(busca)) return false;
+  if ((tipo === 'TICKETS' || tipo === 'RSVP') && itemTipo !== tipo) return false;
+  if (status && status !== 'TODOS' && itemStatus !== status) return false;
+
+  return true;
+}
+
+function agregarResumoFinanceiroEventos(eventos = []) {
+  const porMoeda = new Map();
+
+  for (const evento of eventos) {
+    const financeiro = Array.isArray(evento?.financeiro) ? evento.financeiro : [];
+
+    for (const item of financeiro) {
+      const currency = text(item?.currency || 'BRL') || 'BRL';
+      const atual = porMoeda.get(currency) || {
+        currency,
+        ticketsSold: 0,
+        totalOrders: 0,
+        totalSales: 0,
+        revenue: 0,
+        salesRevenueDifference: 0,
+      };
+
+      atual.ticketsSold += eventoAdminNumero(item?.ticketsSold);
+      atual.totalOrders += eventoAdminNumero(item?.totalOrders);
+      atual.totalSales += eventoAdminNumero(item?.totalSales);
+      atual.revenue += eventoAdminNumero(item?.revenue);
+      atual.salesRevenueDifference += eventoAdminNumero(item?.salesRevenueDifference);
+      porMoeda.set(currency, atual);
+    }
+  }
+
+  return Array.from(porMoeda.values());
+}
+
+async function mapEventosAdminComFinanceiro(
+  rawItems = [],
+  financeiroPermitido = false
+) {
+  const result = [];
+  const batchSize = 6;
+
+  for (let index = 0; index < rawItems.length; index += batchSize) {
+    const batch = rawItems.slice(index, index + batchSize);
+    const mapped = await Promise.all(
+      batch.map(async (item) => {
+        const isTicketed = text(item?.type).toUpperCase() === 'TICKETS';
+        const financeiro = financeiroPermitido && isTicketed
+          ? await obterFinanceiroEventoAdmin(item?._id)
+          : null;
+        return mapEventoAdmin(item, financeiro, financeiroPermitido);
+      })
+    );
+    result.push(...mapped);
+  }
+
+  return result;
+}
+
+export async function listarEventosAdminApi(filtros = {}, tokenRecebido = '') {
+  try {
+    const tokenOk = await validarAdminToken(
+      tokenRecebido,
+      ADMIN_PERMISSIONS.EVENTOS_VER
+    );
+
+    if (!tokenOk.ok) return tokenOk;
+
+    const busca = normalizeSearch(filtros.busca || filtros.q || filtros.search);
+    const tipo = text(filtros.tipo || filtros.type).toUpperCase();
+    const status = text(filtros.status).toUpperCase();
+    const pagina = Math.max(1, Math.floor(eventoAdminNumero(filtros.pagina || filtros.page) || 1));
+    const pageSize = Math.min(
+      50,
+      Math.max(10, Math.floor(eventoAdminNumero(filtros.pageSize || filtros.limit) || 25))
+    );
+    const financeiroPermitido =
+      tokenOk.legacy === true ||
+      hasPermission(tokenOk.permissoes, ADMIN_PERMISSIONS.EVENTOS_FINANCEIRO);
+
+    const rawItems = await listarEventosAdminRaw();
+    const filtrados = rawItems.filter((item) =>
+      eventoAdminMatchesFiltros(item, { busca, tipo, status })
+    );
+    const total = filtrados.length;
+    const offset = (pagina - 1) * pageSize;
+    const pageRaw = filtrados.slice(offset, offset + pageSize);
+
+    const ticketedFiltered = financeiroPermitido
+      ? filtrados.filter((item) => text(item?.type).toUpperCase() === 'TICKETS')
+      : [];
+    const financialMapped = financeiroPermitido
+      ? await mapEventosAdminComFinanceiro(ticketedFiltered, true)
+      : [];
+    const financeiroPorId = new Map(
+      financialMapped.map((item) => [item.id, item.financeiro])
+    );
+
+    const eventos = pageRaw.map((item) => {
+      const id = text(item?._id || item?.id);
+      const isTicketed = text(item?.type).toUpperCase() === 'TICKETS';
+      const financeiro = financeiroPermitido && isTicketed
+        ? (financeiroPorId.get(id) ?? null)
+        : null;
+      return mapEventoAdmin(item, financeiro, financeiroPermitido);
+    });
+
+    return {
+      ok: true,
+      pagina,
+      pageSize,
+      total,
+      eventos,
+      financeiroPermitido,
+      resumo: {
+        eventos: total,
+        ticketados: filtrados.filter(
+          (item) => text(item?.type).toUpperCase() === 'TICKETS'
+        ).length,
+        financeiro: financeiroPermitido
+          ? agregarResumoFinanceiroEventos(financialMapped)
+          : [],
+      },
+    };
+  } catch (err) {
+    console.error('Erro em listarEventosAdminApi:', err);
+    return {
+      ok: false,
+      codigo: 'ERRO_INTERNO',
+      mensagem: 'Não foi possível carregar os eventos administrativos.',
+    };
+  }
+}
+
 async function getAdminConfig() {
   const [emailsRaw, password, token] = await Promise.all([
     getSecret(ADMIN_SECRETS.EMAILS),
@@ -4109,6 +4356,10 @@ function aplicarDependenciasPermissoes(permissoes = []) {
     next.add(ADMIN_PERMISSIONS.AGENDAMENTOS_VER);
   }
 
+  if (next.has(ADMIN_PERMISSIONS.EVENTOS_FINANCEIRO)) {
+    next.add(ADMIN_PERMISSIONS.EVENTOS_VER);
+  }
+
   return Array.from(next).sort();
 }
 
@@ -4172,6 +4423,11 @@ function normalizarPermissoesArmazenadas(value) {
     }
   }
 
+  if (version < 4 && next.has(ADMIN_PERMISSIONS.USUARIOS_EDITAR)) {
+    next.add(ADMIN_PERMISSIONS.EVENTOS_VER);
+    next.add(ADMIN_PERMISSIONS.EVENTOS_FINANCEIRO);
+  }
+
   return aplicarDependenciasPermissoes(Array.from(next));
 }
 
@@ -4231,6 +4487,13 @@ function listarPermissoesDisponiveis() {
         { chave: ADMIN_PERMISSIONS.FORMULARIOS_VER, label: 'Consultar formulários e denúncias' },
         { chave: ADMIN_PERMISSIONS.FORMULARIOS_OPERAR, label: 'Operar triagem, atendimento e ações em lote' },
         { chave: ADMIN_PERMISSIONS.FORMULARIOS_ANEXOS, label: 'Abrir anexos privados' },
+      ],
+    },
+    {
+      grupo: 'Eventos',
+      permissoes: [
+        { chave: ADMIN_PERMISSIONS.EVENTOS_VER, label: 'Ver eventos' },
+        { chave: ADMIN_PERMISSIONS.EVENTOS_FINANCEIRO, label: 'Ver faturamento de ingressos' },
       ],
     },
     {

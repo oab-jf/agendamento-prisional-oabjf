@@ -15,9 +15,11 @@ const store = fs.readFileSync(
   "utf8",
 );
 
-test("catálogo configurável entra no RBAC versão 3", () => {
+test("RBAC evolui para versão 4 preservando Agendamentos e incluindo Eventos", () => {
   assert.match(adminApi, /AGENDAMENTOS_CONFIGURAR:\s*'agendamentos\.configurar'/);
-  assert.match(adminApi, /ADMIN_PERMISSIONS_SCHEMA_VERSION\s*=\s*3/);
+  assert.match(adminApi, /EVENTOS_VER:\s*'eventos\.ver'/);
+  assert.match(adminApi, /EVENTOS_FINANCEIRO:\s*'eventos\.financeiro'/);
+  assert.match(adminApi, /ADMIN_PERMISSIONS_SCHEMA_VERSION\s*=\s*4/);
   assert.match(adminApi, /Configurar modalidades, locais, recursos e ofertas/);
 });
 

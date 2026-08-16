@@ -52,6 +52,7 @@ import {
   obterCatalogoAgendamentosAdminApi,
   salvarCatalogoAgendamentosAdminApi,
   obterCatalogoAgendamentosPublicoApi,
+  listarEventosAdminApi,
 } from 'backend/adminApi';
 
 import {
@@ -10053,6 +10054,68 @@ async function validarAcessoAdminCertificados(request, permission) {
   };
 }
 
+
+
+// ============================================================
+// Portal de Gestão — Eventos
+// ============================================================
+
+export async function use_oabAdminEventos(request) {
+  try {
+    if (isOptions(request)) {
+      return jsonOk(request, { ok: true, method: 'OPTIONS' });
+    }
+
+    if (!isGet(request)) {
+      return jsonBadRequest(request, {
+        ok: false,
+        mensagem: 'Método não permitido para este endpoint.',
+      });
+    }
+
+    const filtros = {
+      busca: getQueryParam(request, ['busca', 'q', 'search']),
+      tipo: getQueryParam(request, ['tipo', 'type']),
+      status: getQueryParam(request, ['status']),
+      pagina: getQueryParam(request, ['pagina', 'page']),
+      pageSize: getQueryParam(request, ['pageSize', 'limit']),
+    };
+
+    const resultado = await listarEventosAdminApi(
+      filtros,
+      getAdminTokenFromRequest(request)
+    );
+
+    if (resultado && resultado.ok) {
+      return jsonOk(request, resultado);
+    }
+
+    if (
+      resultado &&
+      (
+        resultado.codigo === 'ADMIN_NAO_AUTORIZADO' ||
+        resultado.codigo === 'SESSAO_EXPIRADA' ||
+        resultado.codigo === 'SEM_PERMISSAO'
+      )
+    ) {
+      return jsonBadRequest(request, resultado);
+    }
+
+    return jsonServerError(
+      request,
+      resultado || {
+        ok: false,
+        mensagem: 'Não foi possível carregar os eventos administrativos.',
+      }
+    );
+  } catch (err) {
+    console.error('Erro no endpoint oabAdminEventos:', err);
+    return jsonServerError(request, {
+      ok: false,
+      mensagem: 'Não foi possível carregar os eventos agora.',
+    });
+  }
+}
 
 // ============================================================
 // Central de Certificados — autenticação e usuários próprios
