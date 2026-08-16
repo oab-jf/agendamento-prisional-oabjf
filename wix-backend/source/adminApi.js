@@ -61,6 +61,7 @@ const CENTRAL_PUBLIC_URL = 'https://central.juizdefora-oabmg.org.br';
 const LEGACY_ADMIN_ID = 'legacy-secret-admin';
 const AGENDAMENTOS_SHADOW_READ_ENABLED = true;
 const obterResumoVendasEventoElevado = elevate(orders.getSummary);
+const listarPedidosEventoElevado = elevate(orders.listOrders);
 
 const ADMIN_PERMISSIONS = {
   AGENDAMENTOS_VER: 'agendamentos.ver',
@@ -88,6 +89,8 @@ const ADMIN_PERMISSIONS = {
 
   EVENTOS_VER: 'eventos.ver',
   EVENTOS_FINANCEIRO: 'eventos.financeiro',
+  EVENTOS_PRESENCA: 'eventos.presenca',
+  EVENTOS_CERTIFICADOS: 'eventos.certificados',
 
   USUARIOS_VER: 'usuarios.ver',
   USUARIOS_CRIAR: 'usuarios.criar',
@@ -100,7 +103,7 @@ const ADMIN_PERMISSIONS = {
 };
 
 const ALL_ADMIN_PERMISSIONS = Object.keys(ADMIN_PERMISSIONS).map((key) => ADMIN_PERMISSIONS[key]);
-const ADMIN_PERMISSIONS_SCHEMA_VERSION = 4;
+const ADMIN_PERMISSIONS_SCHEMA_VERSION = 5;
 const USUARIOS_CRITICOS_PERMISSAO = ADMIN_PERMISSIONS.USUARIOS_EDITAR;
 
 export async function loginAdminApi(payload = {}) {
@@ -3254,6 +3257,231 @@ async function obterFinanceiroEventoAdmin(eventId) {
   }
 }
 
+function eventoAdminValorDinheiro(value) {
+  const item = value && typeof value === 'object' ? value : {};
+  return eventoAdminNumero(item.value ?? item.amount);
+}
+
+function eventoAdminMoeda(...values) {
+  for (const value of values) {
+    const currency = text(value?.currency);
+    if (currency) return currency;
+  }
+  return 'BRL';
+}
+
+function somarTaxasFinanceiras(items = []) {
+  return (Array.isArray(items) ? items : []).reduce(
+    (total, item) => total + eventoAdminValorDinheiro(item?.amount),
+    0
+  );
+}
+
+function normalizarItemFinanceiroPedido(item, fallbackCurrency = 'BRL') {
+  const price = item?.price || {};
+  const total = item?.total || {};
+  const discount = item?.discount?.amount || {};
+  const tax = item?.tax?.amount || {};
+  const currency = eventoAdminMoeda(total, price, discount, tax) || fallbackCurrency;
+
+  return {
+    name: text(item?.name) || 'Ingresso',
+    quantity: Math.max(0, eventoAdminNumero(item?.quantity)),
+    currency,
+    unitPrice: eventoAdminValorDinheiro(price),
+    total: eventoAdminValorDinheiro(total),
+    discount: eventoAdminValorDinheiro(discount),
+    tax: eventoAdminValorDinheiro(tax),
+    fees: somarTaxasFinanceiras(item?.fees),
+  };
+}
+
+function normalizarPedidoFinanceiroEvento(order) {
+  const invoice = order?.invoice && typeof order.invoice === 'object'
+    ? order.invoice
+    : {};
+  const currency = eventoAdminMoeda(
+    invoice?.grandTotal,
+    invoice?.total,
+    invoice?.subTotal,
+    invoice?.revenue,
+    order?.totalPrice
+  );
+  const items = (Array.isArray(invoice?.items) ? invoice.items : [])
+    .map((item) => normalizarItemFinanceiroPedido(item, currency));
+  const grandTotal = eventoAdminValorDinheiro(invoice?.grandTotal)
+    || eventoAdminValorDinheiro(invoice?.total)
+    || eventoAdminValorDinheiro(order?.totalPrice);
+
+  return {
+    orderNumber: text(order?.orderNumber),
+    created: dateTimeToIso(order?.created),
+    status: text(order?.status).toUpperCase(),
+    confirmed: order?.confirmed === true,
+    paymentMethod: text(order?.method),
+    channel: text(order?.channel).toUpperCase(),
+    ticketsQuantity: Math.max(0, eventoAdminNumero(order?.ticketsQuantity)),
+    currency,
+    subtotal: eventoAdminValorDinheiro(invoice?.subTotal),
+    discount: eventoAdminValorDinheiro(invoice?.discount?.amount),
+    tax: eventoAdminValorDinheiro(invoice?.tax?.amount),
+    fees: somarTaxasFinanceiras(invoice?.fees),
+    grandTotal,
+    revenue: eventoAdminValorDinheiro(invoice?.revenue),
+    couponCode: text(invoice?.discount?.code),
+    couponName: text(invoice?.discount?.name),
+    items,
+  };
+}
+
+async function listarPedidosFinanceirosEventoAdmin(eventId) {
+  const id = text(eventId);
+  if (!id) return [];
+
+  const result = [];
+  const limit = 100;
+  let offset = 0;
+  let total = 0;
+
+  do {
+    const response = await listarPedidosEventoElevado({
+      eventId: [id],
+      fieldset: ['DETAILS', 'INVOICE'],
+      tag: ['CONFIRMED'],
+      sort: 'created:asc',
+      offset,
+      limit,
+    });
+    const batch = Array.isArray(response?.orders) ? response.orders : [];
+    total = Math.max(eventoAdminNumero(response?.total), offset + batch.length);
+    result.push(...batch.map(normalizarPedidoFinanceiroEvento));
+    offset += batch.length;
+
+    if (!batch.length || batch.length < limit) break;
+  } while (offset < total);
+
+  return result;
+}
+
+function agregarTotaisPedidosFinanceiros(pedidos = []) {
+  const porMoeda = new Map();
+
+  for (const pedido of pedidos) {
+    const currency = text(pedido?.currency || 'BRL') || 'BRL';
+    const atual = porMoeda.get(currency) || {
+      currency,
+      orders: 0,
+      tickets: 0,
+      subtotal: 0,
+      discounts: 0,
+      taxes: 0,
+      fees: 0,
+      grandTotal: 0,
+      revenue: 0,
+    };
+
+    atual.orders += 1;
+    atual.tickets += eventoAdminNumero(pedido?.ticketsQuantity);
+    atual.subtotal += eventoAdminNumero(pedido?.subtotal);
+    atual.discounts += eventoAdminNumero(pedido?.discount);
+    atual.taxes += eventoAdminNumero(pedido?.tax);
+    atual.fees += eventoAdminNumero(pedido?.fees);
+    atual.grandTotal += eventoAdminNumero(pedido?.grandTotal);
+    atual.revenue += eventoAdminNumero(pedido?.revenue);
+    porMoeda.set(currency, atual);
+  }
+
+  return Array.from(porMoeda.values());
+}
+
+function agregarTiposIngressosFinanceiros(pedidos = []) {
+  const tipos = new Map();
+
+  for (const pedido of pedidos) {
+    const items = Array.isArray(pedido?.items) ? pedido.items : [];
+
+    for (const item of items) {
+      const currency = text(item?.currency || pedido?.currency || 'BRL') || 'BRL';
+      const name = text(item?.name) || 'Ingresso';
+      const unitPrice = eventoAdminNumero(item?.unitPrice);
+      const key = `${currency}\u0000${name}\u0000${unitPrice}`;
+      const atual = tipos.get(key) || {
+        name,
+        currency,
+        unitPrice,
+        quantity: 0,
+        total: 0,
+        discount: 0,
+        tax: 0,
+        fees: 0,
+      };
+
+      atual.quantity += eventoAdminNumero(item?.quantity);
+      atual.total += eventoAdminNumero(item?.total);
+      atual.discount += eventoAdminNumero(item?.discount);
+      atual.tax += eventoAdminNumero(item?.tax);
+      atual.fees += eventoAdminNumero(item?.fees);
+      tipos.set(key, atual);
+    }
+  }
+
+  return Array.from(tipos.values()).sort((a, b) =>
+    a.name.localeCompare(b.name, 'pt-BR') || a.unitPrice - b.unitPrice
+  );
+}
+
+export async function obterRelatorioFinanceiroEventoAdminApi(
+  eventId,
+  tokenRecebido = ''
+) {
+  try {
+    const tokenOk = await validarAdminToken(
+      tokenRecebido,
+      ADMIN_PERMISSIONS.EVENTOS_FINANCEIRO
+    );
+    if (!tokenOk.ok) return tokenOk;
+
+    const id = text(eventId);
+    if (!id) {
+      return {
+        ok: false,
+        codigo: 'DADOS_OBRIGATORIOS',
+        mensagem: 'Informe o evento para gerar o relatório financeiro.',
+      };
+    }
+
+    const [resumoOficial, pedidos] = await Promise.all([
+      obterFinanceiroEventoAdmin(id),
+      listarPedidosFinanceirosEventoAdmin(id),
+    ]);
+
+    if (resumoOficial === null) {
+      return {
+        ok: false,
+        codigo: 'FINANCEIRO_INDISPONIVEL',
+        mensagem: 'O Wix não retornou os dados financeiros deste evento agora.',
+      };
+    }
+
+    return {
+      ok: true,
+      eventId: id,
+      generatedAt: new Date().toISOString(),
+      summary: resumoOficial,
+      totals: agregarTotaisPedidosFinanceiros(pedidos),
+      ticketTypes: agregarTiposIngressosFinanceiros(pedidos),
+      orders: pedidos.map(({ items, ...pedido }) => pedido),
+    };
+  } catch (err) {
+    console.error('Erro em obterRelatorioFinanceiroEventoAdminApi:', err);
+    return {
+      ok: false,
+      codigo: 'ERRO_INTERNO',
+      mensagem: 'Não foi possível gerar o relatório financeiro deste evento agora.',
+    };
+  }
+}
+
 async function listarEventosAdminRaw() {
   const batchSize = 100;
   const items = [];
@@ -4356,7 +4584,11 @@ function aplicarDependenciasPermissoes(permissoes = []) {
     next.add(ADMIN_PERMISSIONS.AGENDAMENTOS_VER);
   }
 
-  if (next.has(ADMIN_PERMISSIONS.EVENTOS_FINANCEIRO)) {
+  if (
+    next.has(ADMIN_PERMISSIONS.EVENTOS_FINANCEIRO) ||
+    next.has(ADMIN_PERMISSIONS.EVENTOS_PRESENCA) ||
+    next.has(ADMIN_PERMISSIONS.EVENTOS_CERTIFICADOS)
+  ) {
     next.add(ADMIN_PERMISSIONS.EVENTOS_VER);
   }
 
@@ -4428,6 +4660,11 @@ function normalizarPermissoesArmazenadas(value) {
     next.add(ADMIN_PERMISSIONS.EVENTOS_FINANCEIRO);
   }
 
+  if (version < 5 && next.has(ADMIN_PERMISSIONS.USUARIOS_EDITAR)) {
+    next.add(ADMIN_PERMISSIONS.EVENTOS_PRESENCA);
+    next.add(ADMIN_PERMISSIONS.EVENTOS_CERTIFICADOS);
+  }
+
   return aplicarDependenciasPermissoes(Array.from(next));
 }
 
@@ -4494,6 +4731,8 @@ function listarPermissoesDisponiveis() {
       permissoes: [
         { chave: ADMIN_PERMISSIONS.EVENTOS_VER, label: 'Ver eventos' },
         { chave: ADMIN_PERMISSIONS.EVENTOS_FINANCEIRO, label: 'Ver faturamento de ingressos' },
+        { chave: ADMIN_PERMISSIONS.EVENTOS_PRESENCA, label: 'Confirmar e remover presença' },
+        { chave: ADMIN_PERMISSIONS.EVENTOS_CERTIFICADOS, label: 'Emitir certificados' },
       ],
     },
     {

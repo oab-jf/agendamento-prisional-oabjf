@@ -53,6 +53,7 @@ import {
   salvarCatalogoAgendamentosAdminApi,
   obterCatalogoAgendamentosPublicoApi,
   listarEventosAdminApi,
+  obterRelatorioFinanceiroEventoAdminApi,
 } from 'backend/adminApi';
 
 import {
@@ -9969,6 +9970,297 @@ export async function use_oabAdminRemarcarAgendamento(request) {
 }
 
 // ============================================================
+// Portal de Gestão — presença e certificados dentro de Eventos
+// ============================================================
+
+const EVENTOS_OPERACAO_PERMISSIONS = {
+  VER: 'eventos.ver',
+  PRESENCA: 'eventos.presenca',
+  CERTIFICADOS: 'eventos.certificados',
+};
+
+function eventosOperacaoErroResponse(request, resultado) {
+  const safeResultado = resultado || {
+    ok: false,
+    codigo: 'ERRO_INTERNO',
+    mensagem: 'Não foi possível concluir a operação do evento.',
+  };
+
+  if (
+    safeResultado.codigo === 'ERRO_INTERNO' ||
+    safeResultado.codigo === 'CONFIG_ADMIN_INCOMPLETA' ||
+    safeResultado.codigo === 'CONFIG_INFOBIP_INCOMPLETA'
+  ) {
+    return jsonServerError(request, safeResultado);
+  }
+
+  return jsonBadRequest(request, safeResultado);
+}
+
+async function validarAcessoAdminEventosOperacao(
+  request,
+  permissoesObrigatorias = [EVENTOS_OPERACAO_PERMISSIONS.VER]
+) {
+  const token = getAdminTokenFromRequest(request);
+
+  if (!token) {
+    return {
+      ok: false,
+      response: jsonBadRequest(request, {
+        ok: false,
+        codigo: 'ADMIN_NAO_AUTORIZADO',
+        mensagem: 'Acesso administrativo obrigatório.',
+      }),
+    };
+  }
+
+  const resultado = await meAdminApi(token);
+
+  if (!resultado || !resultado.ok) {
+    return {
+      ok: false,
+      response: eventosOperacaoErroResponse(request, resultado),
+    };
+  }
+
+  const permissoes = Array.isArray(resultado.permissoes)
+    ? resultado.permissoes.map(text).filter(Boolean)
+    : [];
+  const required = Array.isArray(permissoesObrigatorias)
+    ? permissoesObrigatorias.map(text).filter(Boolean)
+    : [text(permissoesObrigatorias)].filter(Boolean);
+  const legacy = resultado.legacy === true;
+  const permitido =
+    legacy || required.every((permissao) => permissoes.includes(permissao));
+
+  if (!permitido) {
+    return {
+      ok: false,
+      response: jsonBadRequest(request, {
+        ok: false,
+        codigo: 'SEM_PERMISSAO',
+        permissaoNecessaria: required.join(','),
+        mensagem: 'Seu perfil não possui permissão para executar esta operação em Eventos.',
+      }),
+    };
+  }
+
+  return {
+    ok: true,
+    token,
+    admin: resultado.admin || null,
+    permissoes,
+    legacy,
+    podeEditarPresenca:
+      legacy || permissoes.includes(EVENTOS_OPERACAO_PERMISSIONS.PRESENCA),
+    podeEmitirCertificados:
+      legacy || permissoes.includes(EVENTOS_OPERACAO_PERMISSIONS.CERTIFICADOS),
+  };
+}
+
+export async function use_oabAdminEventoOperacao(request) {
+  try {
+    if (isOptions(request)) {
+      return jsonOk(request, { ok: true, method: 'OPTIONS' });
+    }
+
+    if (!isGet(request)) {
+      return jsonBadRequest(request, {
+        ok: false,
+        codigo: 'METODO_NAO_PERMITIDO',
+        mensagem: 'Método não permitido para este endpoint.',
+      });
+    }
+
+    const acesso = await validarAcessoAdminEventosOperacao(
+      request,
+      [EVENTOS_OPERACAO_PERMISSIONS.VER]
+    );
+    if (!acesso.ok) return acesso.response;
+
+    const eventId = getQueryParam(request, ['eventId', 'eventoId', 'id']);
+
+    if (!eventId) {
+      return jsonBadRequest(request, {
+        ok: false,
+        codigo: 'DADOS_OBRIGATORIOS',
+        mensagem: 'Informe o eventId.',
+      });
+    }
+
+    const resultado = await getEventoCertificados(eventId);
+
+    return jsonOk(request, {
+      ok: true,
+      ...resultado,
+      operacao: {
+        podeEditarPresenca: acesso.podeEditarPresenca === true,
+        podeEmitirCertificados: acesso.podeEmitirCertificados === true,
+      },
+    });
+  } catch (err) {
+    console.error('Erro no endpoint oabAdminEventoOperacao:', err);
+    return jsonServerError(request, {
+      ok: false,
+      codigo: 'ERRO_INTERNO',
+      mensagem: 'Não foi possível carregar participantes e certificados deste evento agora.',
+    });
+  }
+}
+
+export async function use_oabAdminEventoPresenca(request) {
+  try {
+    if (isOptions(request)) {
+      return jsonOk(request, { ok: true, method: 'OPTIONS' });
+    }
+
+    if (!isPost(request)) {
+      return jsonBadRequest(request, {
+        ok: false,
+        codigo: 'METODO_NAO_PERMITIDO',
+        mensagem: 'Método não permitido para este endpoint.',
+      });
+    }
+
+    const acesso = await validarAcessoAdminEventosOperacao(
+      request,
+      [EVENTOS_OPERACAO_PERMISSIONS.PRESENCA]
+    );
+    if (!acesso.ok) return acesso.response;
+
+    const payload = await readJsonBody(request);
+    const eventId = text(payload.eventId || payload.eventoId);
+    const guestId = text(payload.guestId || payload.participanteId || payload.id);
+    const temCompareceu = Object.prototype.hasOwnProperty.call(payload, 'compareceu');
+    const temPresente = Object.prototype.hasOwnProperty.call(payload, 'presente');
+
+    if (!eventId || !guestId || (!temCompareceu && !temPresente)) {
+      return jsonBadRequest(request, {
+        ok: false,
+        codigo: 'DADOS_OBRIGATORIOS',
+        mensagem: 'Informe evento, participante e o novo estado de presença.',
+      });
+    }
+
+    const compareceu = temCompareceu
+      ? payload.compareceu === true
+      : payload.presente === true;
+    const rsvpId = text(payload.rsvpId);
+    const rsvpGuestId = Number(payload.rsvpGuestId);
+    const nome = text(payload.nome || payload.name || payload.participantName);
+    const email = text(payload.email || payload.participantEmail);
+
+    // salvarPresenca() recebe o evento no topo e uma lista de alterações
+    // em `changes`. O bridge HTTP do Portal converte a ação individual para
+    // esse contrato sem duplicar a regra de negócio do backend de certificados.
+    const presencaChange = {
+      guestId,
+      compareceu,
+      ...(rsvpId ? { rsvpId } : {}),
+      ...(Number.isFinite(rsvpGuestId) && rsvpGuestId > 0
+        ? { rsvpGuestId }
+        : {}),
+      ...(nome ? { nome } : {}),
+      ...(email ? { email } : {}),
+    };
+
+    const presencaPayload = {
+      eventId,
+      changes: [presencaChange],
+      actionOrigin: 'event_individual',
+    };
+
+    const adminCertificados = acesso.admin
+      ? {
+          ...acesso.admin,
+          _id: text(acesso.admin._id || acesso.admin.id),
+          id: text(acesso.admin.id || acesso.admin._id),
+          nome: text(acesso.admin.nome || acesso.admin.name),
+          name: text(acesso.admin.name || acesso.admin.nome),
+          email: text(acesso.admin.email),
+        }
+      : null;
+
+    const resultado = await salvarPresenca(
+      presencaPayload,
+      { admin: adminCertificados }
+    );
+
+    if (resultado && resultado.ok) {
+      return jsonOk(request, resultado);
+    }
+
+    return certificadosErroResponse(request, {
+      ...resultado,
+      codigo: resultado?.codigo || 'PRESENCA_NAO_ATUALIZADA',
+      mensagem:
+        resultado?.mensagem ||
+        'A presença deste participante não pôde ser atualizada.',
+    });
+  } catch (err) {
+    console.error('Erro no endpoint oabAdminEventoPresenca:', err);
+    return jsonServerError(request, {
+      ok: false,
+      codigo: 'ERRO_INTERNO',
+      mensagem: 'Não foi possível atualizar a presença agora.',
+    });
+  }
+}
+
+export async function use_oabAdminEventoCertificado(request) {
+  try {
+    if (isOptions(request)) {
+      return jsonOk(request, { ok: true, method: 'OPTIONS' });
+    }
+
+    if (!isPost(request)) {
+      return jsonBadRequest(request, {
+        ok: false,
+        codigo: 'METODO_NAO_PERMITIDO',
+        mensagem: 'Método não permitido para este endpoint.',
+      });
+    }
+
+    const acesso = await validarAcessoAdminEventosOperacao(
+      request,
+      [EVENTOS_OPERACAO_PERMISSIONS.CERTIFICADOS]
+    );
+    if (!acesso.ok) return acesso.response;
+
+    const payload = await readJsonBody(request);
+    const eventId = text(payload.eventId || payload.eventoId);
+    const guestId = text(payload.guestId || payload.participanteId || payload.id);
+
+    if (!eventId || !guestId) {
+      return jsonBadRequest(request, {
+        ok: false,
+        codigo: 'DADOS_OBRIGATORIOS',
+        mensagem: 'Informe evento e participante para emitir o certificado.',
+      });
+    }
+
+    const resultado = await emitirCertificado({
+      ...payload,
+      eventId,
+      guestId,
+    });
+
+    if (resultado && resultado.ok) {
+      return jsonOk(request, resultado);
+    }
+
+    return certificadosErroResponse(request, resultado);
+  } catch (err) {
+    console.error('Erro no endpoint oabAdminEventoCertificado:', err);
+    return jsonServerError(request, {
+      ok: false,
+      codigo: 'ERRO_INTERNO',
+      mensagem: 'Não foi possível emitir o certificado agora.',
+    });
+  }
+}
+
+// ============================================================
 // Central de Certificados — endpoints públicos/admin iniciais
 // ============================================================
 
@@ -10113,6 +10405,67 @@ export async function use_oabAdminEventos(request) {
     return jsonServerError(request, {
       ok: false,
       mensagem: 'Não foi possível carregar os eventos agora.',
+    });
+  }
+}
+
+export async function use_oabAdminEventoFinanceiroRelatorio(request) {
+  try {
+    if (isOptions(request)) {
+      return jsonOk(request, { ok: true, method: 'OPTIONS' });
+    }
+
+    if (!isGet(request)) {
+      return jsonBadRequest(request, {
+        ok: false,
+        codigo: 'METODO_NAO_PERMITIDO',
+        mensagem: 'Método não permitido para este endpoint.',
+      });
+    }
+
+    const eventId = getQueryParam(request, ['eventId', 'eventoId', 'id']);
+    if (!eventId) {
+      return jsonBadRequest(request, {
+        ok: false,
+        codigo: 'DADOS_OBRIGATORIOS',
+        mensagem: 'Informe o eventId.',
+      });
+    }
+
+    const resultado = await obterRelatorioFinanceiroEventoAdminApi(
+      eventId,
+      getAdminTokenFromRequest(request)
+    );
+
+    if (resultado && resultado.ok) {
+      return jsonOk(request, resultado);
+    }
+
+    if (
+      resultado &&
+      (
+        resultado.codigo === 'ADMIN_NAO_AUTORIZADO' ||
+        resultado.codigo === 'SESSAO_EXPIRADA' ||
+        resultado.codigo === 'SEM_PERMISSAO' ||
+        resultado.codigo === 'DADOS_OBRIGATORIOS'
+      )
+    ) {
+      return jsonBadRequest(request, resultado);
+    }
+
+    return jsonServerError(
+      request,
+      resultado || {
+        ok: false,
+        mensagem: 'Não foi possível gerar o relatório financeiro deste evento.',
+      }
+    );
+  } catch (err) {
+    console.error('Erro no endpoint oabAdminEventoFinanceiroRelatorio:', err);
+    return jsonServerError(request, {
+      ok: false,
+      codigo: 'ERRO_INTERNO',
+      mensagem: 'Não foi possível gerar o relatório financeiro agora.',
     });
   }
 }
