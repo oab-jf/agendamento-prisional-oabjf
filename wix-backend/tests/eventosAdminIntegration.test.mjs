@@ -14,7 +14,7 @@ test('RBAC de Eventos separa leitura, financeiro, presença e certificados', () 
   assert.match(adminApi, /EVENTOS_FINANCEIRO:\s*'eventos\.financeiro'/);
   assert.match(adminApi, /EVENTOS_PRESENCA:\s*'eventos\.presenca'/);
   assert.match(adminApi, /EVENTOS_CERTIFICADOS:\s*'eventos\.certificados'/);
-  assert.match(adminApi, /ADMIN_PERMISSIONS_SCHEMA_VERSION\s*=\s*5/);
+  assert.match(adminApi, /ADMIN_PERMISSIONS_SCHEMA_VERSION\s*=\s*6/);
   assert.match(adminApi, /version < 5/);
 });
 

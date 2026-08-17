@@ -15,13 +15,13 @@ const store = fs.readFileSync(
   "utf8",
 );
 
-test("RBAC evolui para versão 5 preservando Agendamentos e operação de Eventos", () => {
+test("RBAC evolui para versão 6 preservando Agendamentos e operação de Eventos", () => {
   assert.match(adminApi, /AGENDAMENTOS_CONFIGURAR:\s*'agendamentos\.configurar'/);
   assert.match(adminApi, /EVENTOS_VER:\s*'eventos\.ver'/);
   assert.match(adminApi, /EVENTOS_FINANCEIRO:\s*'eventos\.financeiro'/);
   assert.match(adminApi, /EVENTOS_PRESENCA:\s*'eventos\.presenca'/);
   assert.match(adminApi, /EVENTOS_CERTIFICADOS:\s*'eventos\.certificados'/);
-  assert.match(adminApi, /ADMIN_PERMISSIONS_SCHEMA_VERSION\s*=\s*5/);
+  assert.match(adminApi, /ADMIN_PERMISSIONS_SCHEMA_VERSION\s*=\s*6/);
   assert.match(adminApi, /Configurar modalidades, locais, recursos e ofertas/);
 });
 

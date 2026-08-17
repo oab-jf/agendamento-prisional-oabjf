@@ -40,6 +40,7 @@ const COL = {
   ADMIN_SESSOES: 'Import4262',
   ADMIN_LOGS: 'Import4261',
   BLOQUEIOS_AGENDA: 'Import4256',
+  DESTAQUES_HOME: 'DestaquesHome',
 };
 
 const ADMIN_SECRETS = {
@@ -100,10 +101,13 @@ const ADMIN_PERMISSIONS = {
   CONFIG_VER: 'config.ver',
   CONFIG_TESTAR_ENVIOS: 'config.testar_envios',
   CONFIG_ATIVAR_ENVIOS: 'config.ativar_envios',
+
+  SITE_CONTEUDO_VER: 'site.conteudo.ver',
+  SITE_CONTEUDO_EDITAR: 'site.conteudo.editar',
 };
 
 const ALL_ADMIN_PERMISSIONS = Object.keys(ADMIN_PERMISSIONS).map((key) => ADMIN_PERMISSIONS[key]);
-const ADMIN_PERMISSIONS_SCHEMA_VERSION = 5;
+const ADMIN_PERMISSIONS_SCHEMA_VERSION = 6;
 const USUARIOS_CRITICOS_PERMISSAO = ADMIN_PERMISSIONS.USUARIOS_EDITAR;
 
 export async function loginAdminApi(payload = {}) {
@@ -3647,6 +3651,356 @@ export async function listarEventosAdminApi(filtros = {}, tokenRecebido = '') {
   }
 }
 
+
+const SITE_EDITOR_PUBLIC_URL = 'https://www.juizdefora-oabmg.org.br/';
+
+function siteEditorDate(value) {
+  if (!value) return null;
+  if (value instanceof Date) {
+    return Number.isNaN(value.getTime()) ? null : value;
+  }
+  const candidate =
+    value && typeof value === 'object' && value.$date
+      ? value.$date
+      : value;
+  const parsed = new Date(candidate);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
+
+function siteEditorRevision(item = {}) {
+  const updated = siteEditorDate(item._updatedDate);
+  return updated ? updated.toISOString() : text(item._id);
+}
+
+function siteEditorImageUrl(value) {
+  const candidate =
+    value && typeof value === 'object'
+      ? value.url || value.src || value.fileUrl || value.uri
+      : value;
+  const raw = text(candidate);
+
+  if (!raw) return '';
+  if (/^https:\/\//i.test(raw)) return raw;
+
+  const match = raw.match(/^(?:wix:)?image:\/\/v1\/([^/]+)/i);
+  return match && match[1]
+    ? `https://static.wixstatic.com/media/${match[1]}`
+    : '';
+}
+
+function siteEditorPageId(item = {}) {
+  return `home:${text(item._id)}`;
+}
+
+function mapHomeSiteEditorDocument(item = {}) {
+  const desktop = siteEditorImageUrl(item.imagemDesktop);
+  const mobile = siteEditorImageUrl(item.imagemMobile) || desktop;
+  const imageAlt = text(item.imagemAlt) || text(item.titulo);
+
+  return {
+    id: siteEditorPageId(item),
+    label: 'Página inicial',
+    path: '/',
+    sourceUrl: SITE_EDITOR_PUBLIC_URL,
+    sourceRevision: siteEditorRevision(item),
+    sections: [
+      {
+        id: 'hero',
+        label: 'Destaque principal',
+        description:
+          'Mensagem editorial principal exibida no topo da página inicial.',
+        visible: item.ativo !== false,
+        visibilityEditable: false,
+        fields: [
+          {
+            kind: 'text',
+            id: 'hero.title',
+            label: 'Título',
+            value: text(item.titulo),
+            required: true,
+            maxLength: 100,
+          },
+          {
+            kind: 'textarea',
+            id: 'hero.body',
+            label: 'Texto de apoio',
+            value: text(item.chamada),
+            required: true,
+            maxLength: 420,
+          },
+          {
+            kind: 'image',
+            id: 'hero.desktopImage',
+            label: 'Imagem desktop',
+            url: desktop,
+            alt: imageAlt,
+            readOnly: true,
+            help:
+              'A troca de arquivo será habilitada quando o Media Manager entrar no painel. Nesta etapa, a imagem atual é apenas visualizada.',
+          },
+          {
+            kind: 'image',
+            id: 'hero.mobileImage',
+            label: 'Imagem mobile',
+            url: mobile,
+            alt: imageAlt,
+            readOnly: true,
+            help:
+              'A troca de arquivo será habilitada quando o Media Manager entrar no painel. Nesta etapa, a imagem atual é apenas visualizada.',
+          },
+          {
+            kind: 'text',
+            id: 'hero.imageAlt',
+            label: 'Texto alternativo das imagens',
+            value: imageAlt,
+            required: true,
+            maxLength: 180,
+            help:
+              'Descreva de forma objetiva o conteúdo visual para acessibilidade.',
+          },
+          {
+            kind: 'link',
+            id: 'hero.cta',
+            label: 'Botão principal',
+            text: text(item.rotuloCta),
+            href: text(item.linkCta),
+            required: true,
+            help:
+              'Use um caminho interno iniciado por / ou um endereço HTTPS completo.',
+          },
+        ],
+      },
+    ],
+  };
+}
+
+function siteEditorField(document = {}, fieldId = '') {
+  const sections = Array.isArray(document.sections) ? document.sections : [];
+  for (const section of sections) {
+    const fields = Array.isArray(section?.fields) ? section.fields : [];
+    const field = fields.find((item) => text(item?.id) === fieldId);
+    if (field) return field;
+  }
+  return null;
+}
+
+function validarSiteEditorHref(value) {
+  const raw = text(value);
+  if (!raw) return false;
+  if (raw.startsWith('/')) return true;
+  try {
+    const parsed = new URL(raw);
+    return parsed.protocol === 'https:';
+  } catch (_) {
+    return false;
+  }
+}
+
+function validarDocumentoHomeSiteEditor(document = {}) {
+  const title = siteEditorField(document, 'hero.title');
+  const body = siteEditorField(document, 'hero.body');
+  const imageAlt = siteEditorField(document, 'hero.imageAlt');
+  const cta = siteEditorField(document, 'hero.cta');
+
+  if (!title || !text(title.value)) {
+    return 'Informe o título do destaque da Home.';
+  }
+  if (text(title.value).length > 100) {
+    return 'O título da Home deve ter até 100 caracteres.';
+  }
+  if (!body || !text(body.value)) {
+    return 'Informe o texto de apoio do destaque da Home.';
+  }
+  if (text(body.value).length > 420) {
+    return 'O texto de apoio da Home deve ter até 420 caracteres.';
+  }
+  if (!imageAlt || !text(imageAlt.value)) {
+    return 'Informe o texto alternativo das imagens da Home.';
+  }
+  if (text(imageAlt.value).length > 180) {
+    return 'O texto alternativo deve ter até 180 caracteres.';
+  }
+  if (!cta || !text(cta.text) || !text(cta.href)) {
+    return 'Informe o texto e o destino do botão principal.';
+  }
+  if (!validarSiteEditorHref(cta.href)) {
+    return 'Use um caminho interno iniciado por / ou um endereço HTTPS no botão principal.';
+  }
+
+  return '';
+}
+
+async function obterDestaqueHomeSiteEditorPorId(itemId = '') {
+  const id = text(itemId);
+  if (!id) return null;
+
+  try {
+    return await wixData.get(COL.DESTAQUES_HOME, id, {
+      suppressAuth: true,
+    });
+  } catch (_) {
+    return null;
+  }
+}
+
+async function listarDestaquesHomeSiteEditor() {
+  const result = await wixData
+    .query(COL.DESTAQUES_HOME)
+    .descending('prioridade')
+    .descending('_updatedDate')
+    .limit(50)
+    .find({ suppressAuth: true });
+
+  return (result.items || []).filter((item) => item && item._id);
+}
+
+export async function obterConteudoSiteAdminApi(tokenRecebido = '') {
+  try {
+    const tokenOk = await validarAdminToken(
+      tokenRecebido,
+      ADMIN_PERMISSIONS.SITE_CONTEUDO_VER
+    );
+
+    if (!tokenOk.ok) return tokenOk;
+
+    const items = await listarDestaquesHomeSiteEditor();
+
+    if (!items.length) {
+      return {
+        ok: false,
+        codigo: 'CONTEUDO_NAO_ENCONTRADO',
+        mensagem: 'Nenhum destaque da Home foi encontrado na fonte editorial.',
+      };
+    }
+
+    return {
+      ok: true,
+      workspace: {
+        pages: items.map(mapHomeSiteEditorDocument),
+        capabilities: {
+          remoteDraft: true,
+          publish: false,
+          mediaUpload: false,
+        },
+        discoveryNote:
+          'O editor está conectado à fonte editorial real da Home. Salvar atualiza o CMS institucional. A publicação do novo site permanece separada até automatizarmos o deploy.',
+      },
+    };
+  } catch (err) {
+    console.error('Erro em obterConteudoSiteAdminApi:', err);
+    return {
+      ok: false,
+      codigo: 'ERRO_INTERNO',
+      mensagem: 'Não foi possível carregar o conteúdo editorial do site.',
+    };
+  }
+}
+
+export async function salvarConteudoSiteAdminApi(
+  payload = {},
+  tokenRecebido = ''
+) {
+  try {
+    const tokenOk = await validarAdminToken(
+      tokenRecebido,
+      ADMIN_PERMISSIONS.SITE_CONTEUDO_EDITAR
+    );
+
+    if (!tokenOk.ok) return tokenOk;
+
+    const document = payload.document || {};
+    const pageId = text(payload.pageId || document.id);
+    const match = pageId.match(/^home:(.+)$/);
+
+    if (!match || !match[1]) {
+      return {
+        ok: false,
+        codigo: 'PAGINA_NAO_SUPORTADA',
+        mensagem: 'Esta página ainda não está disponível para edição remota.',
+      };
+    }
+
+    const current = await obterDestaqueHomeSiteEditorPorId(match[1]);
+
+    if (!current || !current._id) {
+      return {
+        ok: false,
+        codigo: 'CONTEUDO_NAO_ENCONTRADO',
+        mensagem: 'O destaque da Home não foi encontrado.',
+      };
+    }
+
+    const currentRevision = siteEditorRevision(current);
+    const sourceRevision = text(
+      payload.sourceRevision || document.sourceRevision
+    );
+
+    if (sourceRevision && sourceRevision !== currentRevision) {
+      return {
+        ok: false,
+        codigo: 'CONFLITO_REVISAO',
+        mensagem:
+          'O conteúdo foi alterado por outra sessão. Recarregue o editor antes de salvar novamente.',
+        sourceRevision: currentRevision,
+      };
+    }
+
+    const validationError = validarDocumentoHomeSiteEditor(document);
+
+    if (validationError) {
+      return {
+        ok: false,
+        codigo: 'DADOS_INVALIDOS',
+        mensagem: validationError,
+      };
+    }
+
+    const title = siteEditorField(document, 'hero.title');
+    const body = siteEditorField(document, 'hero.body');
+    const imageAlt = siteEditorField(document, 'hero.imageAlt');
+    const cta = siteEditorField(document, 'hero.cta');
+
+    const updated = {
+      ...current,
+      titulo: text(title.value),
+      chamada: text(body.value),
+      imagemAlt: text(imageAlt.value),
+      rotuloCta: text(cta.text),
+      linkCta: text(cta.href),
+    };
+
+    const saved = await wixData.update(COL.DESTAQUES_HOME, updated, {
+      suppressAuth: true,
+    });
+
+    await registrarAdminLog(
+      tokenOk,
+      'site.conteudo.salvar',
+      'DestaquesHome',
+      saved._id,
+      {
+        pagina: '/',
+        titulo: text(saved.titulo),
+        revisaoAnterior: currentRevision,
+        revisaoAtual: siteEditorRevision(saved),
+      }
+    );
+
+    return {
+      ok: true,
+      mensagem: 'Conteúdo da Home salvo na fonte editorial.',
+      page: mapHomeSiteEditorDocument(saved),
+    };
+  } catch (err) {
+    console.error('Erro em salvarConteudoSiteAdminApi:', err);
+    return {
+      ok: false,
+      codigo: 'ERRO_INTERNO',
+      mensagem: 'Não foi possível salvar o conteúdo editorial do site.',
+    };
+  }
+}
+
 async function getAdminConfig() {
   const [emailsRaw, password, token] = await Promise.all([
     getSecret(ADMIN_SECRETS.EMAILS),
@@ -4592,6 +4946,10 @@ function aplicarDependenciasPermissoes(permissoes = []) {
     next.add(ADMIN_PERMISSIONS.EVENTOS_VER);
   }
 
+  if (next.has(ADMIN_PERMISSIONS.SITE_CONTEUDO_EDITAR)) {
+    next.add(ADMIN_PERMISSIONS.SITE_CONTEUDO_VER);
+  }
+
   return Array.from(next).sort();
 }
 
@@ -4665,6 +5023,11 @@ function normalizarPermissoesArmazenadas(value) {
     next.add(ADMIN_PERMISSIONS.EVENTOS_CERTIFICADOS);
   }
 
+  if (version < 6 && next.has(ADMIN_PERMISSIONS.USUARIOS_EDITAR)) {
+    next.add(ADMIN_PERMISSIONS.SITE_CONTEUDO_VER);
+    next.add(ADMIN_PERMISSIONS.SITE_CONTEUDO_EDITAR);
+  }
+
   return aplicarDependenciasPermissoes(Array.from(next));
 }
 
@@ -4733,6 +5096,13 @@ function listarPermissoesDisponiveis() {
         { chave: ADMIN_PERMISSIONS.EVENTOS_FINANCEIRO, label: 'Ver faturamento de ingressos' },
         { chave: ADMIN_PERMISSIONS.EVENTOS_PRESENCA, label: 'Confirmar e remover presença' },
         { chave: ADMIN_PERMISSIONS.EVENTOS_CERTIFICADOS, label: 'Emitir certificados' },
+      ],
+    },
+    {
+      grupo: 'Conteúdo do site',
+      permissoes: [
+        { chave: ADMIN_PERMISSIONS.SITE_CONTEUDO_VER, label: 'Ver conteúdo editorial do site' },
+        { chave: ADMIN_PERMISSIONS.SITE_CONTEUDO_EDITAR, label: 'Editar conteúdo editorial do site' },
       ],
     },
     {

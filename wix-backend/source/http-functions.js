@@ -56,6 +56,8 @@ import {
   obterCatalogoAgendamentosPublicoApi,
   listarEventosAdminApi,
   obterRelatorioFinanceiroEventoAdminApi,
+  obterConteudoSiteAdminApi,
+  salvarConteudoSiteAdminApi,
 } from 'backend/adminApi';
 
 import {
@@ -10731,6 +10733,60 @@ function adminBloqueiosErroResponse(request, resultado) {
   }
 
   return jsonServerError(request, resultado);
+}
+
+
+function adminSiteConteudoErroResponse(request, resultado) {
+  if (
+    resultado.codigo === 'ADMIN_NAO_AUTORIZADO' ||
+    resultado.codigo === 'SESSAO_EXPIRADA' ||
+    resultado.codigo === 'SEM_PERMISSAO' ||
+    resultado.codigo === 'CONFIG_ADMIN_INCOMPLETA' ||
+    resultado.codigo === 'DADOS_INVALIDOS' ||
+    resultado.codigo === 'CONFLITO_REVISAO' ||
+    resultado.codigo === 'CONTEUDO_NAO_ENCONTRADO' ||
+    resultado.codigo === 'PAGINA_NAO_SUPORTADA'
+  ) {
+    return jsonBadRequest(request, resultado);
+  }
+
+  return jsonServerError(request, resultado);
+}
+
+export async function use_oabAdminSiteConteudo(request) {
+  try {
+    if (isOptions(request)) {
+      return jsonOk(request, { ok: true, method: 'OPTIONS' });
+    }
+
+    const token = getAdminTokenFromRequest(request);
+
+    if (isGet(request)) {
+      const resultado = await obterConteudoSiteAdminApi(token);
+
+      if (resultado.ok) return jsonOk(request, resultado);
+      return adminSiteConteudoErroResponse(request, resultado);
+    }
+
+    if (isPost(request)) {
+      const payload = await readJsonBody(request);
+      const resultado = await salvarConteudoSiteAdminApi(payload, token);
+
+      if (resultado.ok) return jsonOk(request, resultado);
+      return adminSiteConteudoErroResponse(request, resultado);
+    }
+
+    return jsonBadRequest(request, {
+      ok: false,
+      mensagem: 'Método não permitido para este endpoint.',
+    });
+  } catch (err) {
+    console.error('Erro no endpoint oabAdminSiteConteudo:', err);
+    return jsonServerError(request, {
+      ok: false,
+      mensagem: 'Não foi possível processar o conteúdo editorial do site.',
+    });
+  }
 }
 
 export async function use_oabAdminUsuarios(request) {
