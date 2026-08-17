@@ -5,6 +5,8 @@ import { fetch } from 'wix-fetch';
 import { getSecret } from 'wix-secrets-backend';
 import { submissions } from 'wix-forms.v2';
 import { elevate } from 'wix-auth';
+import { wixEventsV2, orders } from 'wix-events.v2';
+import { rsvpV2 } from '@wix/events';
 
 import {
   listarDatasDisponiveis,
@@ -6114,6 +6116,1228 @@ export async function use_oabEventosPublicos(request) {
       version: 1,
       codigo: 'ERRO_INTERNO',
       mensagem: 'Não foi possível carregar a agenda de eventos agora.',
+    });
+  }
+}
+
+
+// ============================================================
+// Site público — detalhe, RSVP e ticketing de Eventos v0.2
+// ============================================================
+
+const EVENTO_PUBLICO_ACTION_WINDOW_MS = 10 * 60 * 1000;
+const EVENTO_PUBLICO_RSVP_MAX = 5;
+const EVENTO_PUBLICO_RESERVA_MAX = 5;
+const eventoPublicoRsvpRateLimit = new Map();
+const eventoPublicoReservaRateLimit = new Map();
+
+const EVENTO_PUBLICO_FIELDS = [
+  'DETAILS',
+  'TEXTS',
+  'REGISTRATION',
+  'URLS',
+  'FORM',
+  'SEO_SETTINGS',
+];
+
+const EVENTO_PUBLICO_RSVP_CONTROLS_SUPPORTED = new Set([
+  'INPUT',
+  'TEXTAREA',
+  'DROPDOWN',
+  'RADIO',
+  'CHECKBOX',
+  'NAME',
+  'DATE',
+]);
+
+function eventoV020Slug(value) {
+  const slug = text(value).toLowerCase();
+
+  if (!/^[a-z0-9][a-z0-9-]{0,129}$/.test(slug)) {
+    return '';
+  }
+
+  return slug;
+}
+
+function eventoV020DateIso(value) {
+  return dataIsoHome(value);
+}
+
+function eventoV020Number(value, fallback = 0) {
+  const number = Number(value);
+  return Number.isFinite(number) ? number : fallback;
+}
+
+function eventoV020Boolean(value) {
+  return value === true;
+}
+
+function eventoV020First(...values) {
+  for (const value of values) {
+    const normalized = text(value);
+    if (normalized) return normalized;
+  }
+
+  return '';
+}
+
+function eventoV020RichTextToText(value) {
+  const fragments = [];
+
+  function walk(node) {
+    if (node === null || node === undefined) return;
+
+    if (typeof node === 'string' || typeof node === 'number') {
+      const normalized = text(node);
+      if (normalized) fragments.push(normalized);
+      return;
+    }
+
+    if (Array.isArray(node)) {
+      node.forEach(walk);
+      return;
+    }
+
+    if (typeof node !== 'object') return;
+
+    if (typeof node.text === 'string') {
+      const normalized = text(node.text);
+      if (normalized) fragments.push(normalized);
+    }
+
+    if (Array.isArray(node.nodes)) walk(node.nodes);
+    if (Array.isArray(node.children)) walk(node.children);
+    if (Array.isArray(node.content)) walk(node.content);
+
+    if (node.document && typeof node.document === 'object') {
+      walk(node.document);
+    }
+  }
+
+  walk(value);
+
+  return fragments
+    .join('\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
+function eventoV020NativeUrl(event = {}) {
+  const base = text(event?.eventPageUrl?.base);
+  const path = text(event?.eventPageUrl?.path);
+
+  if (base && path) {
+    try {
+      return new URL(path, base).toString();
+    } catch (err) {
+      // usa fallback abaixo
+    }
+  }
+
+  const slug = eventoV020Slug(event.slug);
+
+  return slug
+    ? `https://www.juizdefora-oabmg.org.br/event-details/${encodeURIComponent(slug)}`
+    : '';
+}
+
+function eventoV020LocationAddress(event = {}) {
+  const address = event?.location?.address;
+
+  if (!address) return '';
+
+  if (typeof address === 'string') {
+    return text(address);
+  }
+
+  return eventoV020First(
+    address.formattedAddress,
+    [
+      address.streetAddress,
+      address.city,
+      address.subdivision,
+      address.country,
+    ].filter(Boolean).join(', ')
+  );
+}
+
+function eventoV020CalendarUrls(event = {}) {
+  const urls = event.calendarUrls || event.calendarLinks || {};
+
+  return {
+    google: eventoV020First(
+      urls.google,
+      urls.googleCalendar,
+      urls.googleCalendarUrl,
+      urls.googleUrl
+    ),
+    ics: eventoV020First(
+      urls.ics,
+      urls.ical,
+      urls.iCal,
+      urls.icsUrl,
+      urls.iCalUrl
+    ),
+  };
+}
+
+function eventoV020FormOptions(input = {}, control = {}) {
+  const rawOptions = Array.isArray(input.options)
+    ? input.options
+    : Array.isArray(control.options)
+      ? control.options
+      : [];
+
+  return rawOptions
+    .map((option) => {
+      if (option === null || option === undefined) return null;
+
+      if (typeof option === 'string' || typeof option === 'number') {
+        const value = text(option);
+        return value ? { value, label: value } : null;
+      }
+
+      if (typeof option !== 'object') return null;
+
+      const value = eventoV020First(
+        option.value,
+        option.id,
+        option.key,
+        option.label
+      );
+
+      if (!value) return null;
+
+      return {
+        value,
+        label: eventoV020First(option.label, option.name, value),
+      };
+    })
+    .filter(Boolean)
+    .slice(0, 60);
+}
+
+function eventoV020FormFields(event = {}) {
+  const controls = Array.isArray(event?.form?.controls)
+    ? event.form.controls
+    : [];
+  const fields = [];
+  let supported = true;
+
+  for (const control of controls) {
+    const controlType = text(
+      control?.type || control?.controlType
+    ).toUpperCase();
+
+    if (
+      controlType &&
+      !EVENTO_PUBLICO_RSVP_CONTROLS_SUPPORTED.has(controlType)
+    ) {
+      supported = false;
+    }
+
+    const inputs = Array.isArray(control?.inputs)
+      ? control.inputs
+      : [];
+
+    for (const input of inputs) {
+      const name = text(input?.name);
+
+      if (!name || name === 'rsvpStatus') continue;
+
+      fields.push({
+        name,
+        label: eventoV020First(
+          input?.label,
+          control?.label,
+          name === 'firstName'
+            ? 'Nome'
+            : name === 'lastName'
+              ? 'Sobrenome'
+              : name === 'email'
+                ? 'E-mail'
+                : name
+        ),
+        controlType: controlType || 'INPUT',
+        inputType: text(input?.type).toUpperCase() || 'TEXT',
+        required:
+          input?.mandatory === true ||
+          input?.required === true ||
+          control?.mandatory === true ||
+          control?.required === true,
+        maxLength: Math.max(
+          0,
+          Math.min(
+            5000,
+            eventoV020Number(
+              input?.maxLength || control?.maxLength,
+              0
+            )
+          )
+        ),
+        options: eventoV020FormOptions(input, control),
+      });
+    }
+  }
+
+  const names = new Set(fields.map((field) => field.name));
+  const hasSystemFields = ['firstName', 'lastName', 'email'].every(
+    (name) => names.has(name)
+  );
+
+  return {
+    fields,
+    supported: supported && hasSystemFields,
+  };
+}
+
+function eventoV020TicketDefinitions(raw = {}) {
+  if (Array.isArray(raw)) return raw;
+
+  const candidates = [
+    raw.definitions,
+    raw.ticketDefinitions,
+    raw.items,
+    raw.tickets,
+  ];
+
+  return (
+    candidates.find((candidate) => Array.isArray(candidate)) || []
+  );
+}
+
+function eventoV020TicketPrice(ticket = {}) {
+  const raw = eventoV020First(
+    ticket?.price?.value,
+    ticket?.price?.amount,
+    ticket?.fixedPrice?.value,
+    ticket?.fixedPrice?.amount
+  );
+
+  const value = raw === '' ? null : Number(raw);
+
+  return Number.isFinite(value) ? value : null;
+}
+
+function eventoV020TicketPricingType(ticket = {}) {
+  return text(
+    ticket?.pricing?.pricingType ||
+    ticket?.pricingType
+  ).toUpperCase();
+}
+
+function eventoV020TicketSupported(ticket = {}) {
+  const pricingType = eventoV020TicketPricingType(ticket);
+  const options =
+    ticket?.pricing?.pricingOptions?.options ||
+    ticket?.pricingOptions?.options ||
+    ticket?.pricing?.options ||
+    [];
+
+  if (
+    pricingType &&
+    pricingType !== 'STANDARD'
+  ) {
+    return false;
+  }
+
+  if (Array.isArray(options) && options.length > 0) {
+    return false;
+  }
+
+  return true;
+}
+
+function eventoV020MapTicket(ticket = {}, currencyFallback = 'BRL') {
+  const priceValue = eventoV020TicketPrice(ticket);
+  const currency = eventoV020First(
+    ticket?.price?.currency,
+    ticket?.fixedPrice?.currency,
+    currencyFallback,
+    'BRL'
+  );
+
+  let priceFormatted = eventoV020First(
+    ticket?.priceFormatted,
+    ticket?.formattedPrice
+  );
+
+  if (!priceFormatted && priceValue !== null) {
+    try {
+      priceFormatted = new Intl.NumberFormat('pt-BR', {
+        style: 'currency',
+        currency,
+      }).format(priceValue);
+    } catch (err) {
+      priceFormatted = `R$ ${priceValue.toFixed(2).replace('.', ',')}`;
+    }
+  }
+
+  return {
+    id: eventoV020First(ticket?._id, ticket?.id),
+    name: eventoV020First(ticket?.name, ticket?.title, 'Ingresso'),
+    description: text(ticket?.description),
+    free: ticket?.free === true || priceValue === 0,
+    priceValue,
+    currency,
+    priceFormatted,
+    limitPerCheckout: Math.max(
+      0,
+      eventoV020Number(ticket?.limitPerCheckout, 0)
+    ),
+    saleStatus: text(ticket?.saleStatus).toUpperCase(),
+    feeType: text(ticket?.wixFeeConfig?.type).toUpperCase(),
+    supported: eventoV020TicketSupported(ticket),
+  };
+}
+
+async function eventoV020GetEventBySlug(slug) {
+  const response = await wixEventsV2.getEventBySlug(slug, {
+    fields: EVENTO_PUBLICO_FIELDS,
+  });
+
+  const event = response?.event || response;
+
+  if (!event || !eventoV020First(event?._id, event?.id)) {
+    return null;
+  }
+
+  return event;
+}
+
+async function eventoV020Load(slug, includeTickets = true) {
+  const event = await eventoV020GetEventBySlug(slug);
+
+  if (!event) return null;
+
+  const status = text(event.status).toUpperCase();
+
+  if (
+    status === 'CANCELED' ||
+    status === 'DRAFT' ||
+    text(event.title).toUpperCase().includes('TESTE INTERNO')
+  ) {
+    return null;
+  }
+
+  const eventId = eventoV020First(event?._id, event?.id);
+  const registration = event.registration || {};
+  const registrationType = text(registration.type).toUpperCase();
+  const registrationInitialType = text(
+    registration.initialType
+  ).toUpperCase();
+  const registrationStatus = text(
+    registration.status
+  ).toUpperCase();
+
+  const startAt = eventoV020DateIso(
+    event?.dateAndTimeSettings?.startDate
+  );
+  const endAt = eventoV020DateIso(
+    event?.dateAndTimeSettings?.endDate
+  );
+
+  const now = Date.now();
+  const endMs = endAt ? new Date(endAt).getTime() : NaN;
+  const startMs = startAt ? new Date(startAt).getTime() : NaN;
+
+  const past =
+    status === 'ENDED' ||
+    (Number.isFinite(endMs) && endMs < now) ||
+    (
+      !Number.isFinite(endMs) &&
+      Number.isFinite(startMs) &&
+      startMs < now &&
+      status !== 'STARTED'
+    );
+
+  const form = eventoV020FormFields(event);
+  const nativeUrl = eventoV020NativeUrl(event);
+
+  let rawTickets = [];
+  let tickets = [];
+
+  if (
+    includeTickets &&
+    registrationType === 'TICKETING' &&
+    eventId
+  ) {
+    try {
+      const ticketResponse = await orders.listAvailableTickets({
+        eventId,
+        limit: 100,
+      });
+
+      rawTickets = eventoV020TicketDefinitions(ticketResponse);
+      const currency = eventoV020First(
+        registration?.tickets?.lowestPrice?.currency,
+        'BRL'
+      );
+
+      tickets = rawTickets
+        .map((ticket) => eventoV020MapTicket(ticket, currency))
+        .filter((ticket) => ticket.id);
+    } catch (err) {
+      console.warn('Eventos público: ingressos indisponíveis.', {
+        eventId,
+      });
+    }
+  }
+
+  const soldOut =
+    registration?.tickets?.soldOut === true ||
+    registrationStatus.includes('SOLD_OUT');
+
+  const ticketLimitPerOrder = Math.max(
+    1,
+    Math.min(
+      50,
+      eventoV020Number(
+        registration?.tickets?.limitPerOrder ||
+        registration?.tickets?.ticketLimitPerOrder,
+        50
+      )
+    )
+  );
+
+  const reservationDurationInMinutes = Math.max(
+    0,
+    eventoV020Number(
+      registration?.tickets?.reservationDurationInMinutes ||
+      event?.reservationDurationInMinutes,
+      0
+    )
+  );
+
+  const externalRegistrationUrl = eventoV020First(
+    registration?.external?.url,
+    registration?.externalUrl
+  );
+
+  const customRsvpSupported =
+    !past &&
+    registrationType === 'RSVP' &&
+    registrationInitialType === 'RSVP' &&
+    !registrationStatus.includes('CLOSED') &&
+    form.supported;
+
+  const customTicketingSupported =
+    !past &&
+    registrationType === 'TICKETING' &&
+    registrationInitialType === 'TICKETING' &&
+    !registrationStatus.includes('CLOSED') &&
+    !soldOut &&
+    tickets.length > 0 &&
+    tickets.every((ticket) => ticket.supported);
+
+  return {
+    rawEvent: event,
+    rawTickets,
+    publicEvent: {
+      id: eventId,
+      title: text(event.title),
+      slug: eventoV020Slug(event.slug),
+      shortDescription: text(event.shortDescription),
+      description: eventoV020First(
+        event.detailedDescription,
+        eventoV020RichTextToText(event.description)
+      ),
+      imageUrl: normalizarImagemHome(event.mainImage),
+      startAt,
+      endAt,
+      locationType: text(event?.location?.type).toUpperCase(),
+      location: eventoV020First(
+        event?.location?.name,
+        event?.location?.type === 'ONLINE'
+          ? 'Evento online'
+          : ''
+      ),
+      locationAddress: eventoV020LocationAddress(event),
+      status,
+      past,
+      nativeUrl,
+      externalRegistrationUrl,
+      registrationType,
+      registrationStatus,
+      registrationInitialType,
+      soldOut,
+      ticketLimitPerOrder,
+      reservationDurationInMinutes,
+      customRsvpSupported,
+      rsvpSubmitStatus:
+        registrationStatus.includes('WAITLIST')
+          ? 'WAITLIST'
+          : 'YES',
+      customTicketingSupported,
+      formFields: form.fields,
+      tickets,
+      calendarUrls: eventoV020CalendarUrls(event),
+    },
+  };
+}
+
+function eventoV020RateLimit(store, request, suffix = '') {
+  const now = Date.now();
+
+  for (const [key, entry] of store.entries()) {
+    if (
+      !entry ||
+      !Number.isFinite(entry.startedAt) ||
+      now - entry.startedAt >= EVENTO_PUBLICO_ACTION_WINDOW_MS
+    ) {
+      store.delete(key);
+    }
+  }
+
+  const ip = getClientIp(request) || 'sem-ip';
+  const key = `${ip}|${text(suffix).toLowerCase().slice(0, 180)}`;
+  const current = store.get(key);
+
+  if (
+    !current ||
+    now - current.startedAt >= EVENTO_PUBLICO_ACTION_WINDOW_MS
+  ) {
+    store.set(key, {
+      startedAt: now,
+      count: 1,
+    });
+
+    return {
+      allowed: true,
+      retryAfterSeconds: 0,
+    };
+  }
+
+  current.count += 1;
+  store.set(key, current);
+
+  return {
+    allowed: true,
+    retryAfterSeconds: 0,
+    count: current.count,
+  };
+}
+
+function eventoV020RateLimitAllowed(result, max) {
+  return !result.count || result.count <= max;
+}
+
+function eventoV020Email(value) {
+  const email = text(value).toLowerCase();
+
+  if (
+    !email ||
+    email.length > 254 ||
+    !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)
+  ) {
+    return '';
+  }
+
+  return email;
+}
+
+function eventoV020InputValue(field, value) {
+  const options = Array.isArray(field.options)
+    ? field.options
+    : [];
+
+  if (field.controlType === 'CHECKBOX') {
+    const values = Array.isArray(value)
+      ? value.map(text).filter(Boolean)
+      : [];
+
+    const allowed = new Set(options.map((option) => option.value));
+
+    if (
+      allowed.size &&
+      values.some((item) => !allowed.has(item))
+    ) {
+      throw new Error(`Valor inválido para ${field.label}.`);
+    }
+
+    if (field.required && values.length === 0) {
+      throw new Error(`Preencha o campo ${field.label}.`);
+    }
+
+    return {
+      inputName: field.name,
+      value: '',
+      values,
+    };
+  }
+
+  const normalized = text(value);
+
+  if (field.required && !normalized) {
+    throw new Error(`Preencha o campo ${field.label}.`);
+  }
+
+  if (
+    field.maxLength > 0 &&
+    normalized.length > field.maxLength
+  ) {
+    throw new Error(
+      `O campo ${field.label} ultrapassa o limite permitido.`
+    );
+  }
+
+  if (
+    options.length &&
+    normalized &&
+    !options.some((option) => option.value === normalized)
+  ) {
+    throw new Error(`Valor inválido para ${field.label}.`);
+  }
+
+  return {
+    inputName: field.name,
+    value: normalized,
+  };
+}
+
+function eventoV020BuildRsvp(evento, values = {}, status = 'YES') {
+  const allowedStatus =
+    evento.rsvpSubmitStatus === 'WAITLIST'
+      ? 'WAITLIST'
+      : 'YES';
+
+  if (status !== allowedStatus) {
+    throw new Error('Status de inscrição inválido.');
+  }
+
+  const inputValues = evento.formFields.map((field) =>
+    eventoV020InputValue(field, values[field.name])
+  );
+
+  const firstName = text(values.firstName);
+  const lastName = text(values.lastName);
+  const email = eventoV020Email(values.email);
+
+  if (!firstName || firstName.length > 50) {
+    throw new Error('Informe um nome válido.');
+  }
+
+  if (!lastName || lastName.length > 50) {
+    throw new Error('Informe um sobrenome válido.');
+  }
+
+  if (!email) {
+    throw new Error('Informe um e-mail válido.');
+  }
+
+  return {
+    eventId: evento.id,
+    firstName,
+    lastName,
+    email,
+    form: {
+      inputValues,
+    },
+    status: allowedStatus,
+    additionalGuestDetails: {
+      guestCount: 0,
+      guestNames: [],
+    },
+  };
+}
+
+function eventoV020CheckoutUrl(evento, reservationId) {
+  const nativeUrl = text(evento.nativeUrl);
+  const id = text(reservationId);
+
+  if (!nativeUrl || !id) return '';
+
+  return `${nativeUrl.replace(/\/+$/, '')}/ticket-form?reservationId=${encodeURIComponent(id)}`;
+}
+
+function eventoV020ReservationId(result = {}) {
+  return eventoV020First(
+    result?._id,
+    result?.id,
+    result?.reservationId,
+    result?.reservation?._id,
+    result?.reservation?.id
+  );
+}
+
+function eventoV020ReservationExpiration(result = {}) {
+  return eventoV020DateIso(
+    result?.expirationDate ||
+    result?.expirationTime ||
+    result?.expires ||
+    result?.reservation?.expirationDate
+  );
+}
+
+/**
+ * GET /_functions/oabEventoPublico?slug={slug}
+ */
+export async function use_oabEventoPublico(request) {
+  try {
+    if (isOptions(request)) {
+      return jsonOk(request, {
+        ok: true,
+        version: 2,
+        method: 'OPTIONS',
+      });
+    }
+
+    if (!isGet(request)) {
+      return jsonBadRequest(request, {
+        ok: false,
+        version: 2,
+        codigo: 'METODO_NAO_PERMITIDO',
+        mensagem: 'Método não permitido para este endpoint.',
+      });
+    }
+
+    const slug = eventoV020Slug(
+      getQueryParam(request, ['slug', 'eventSlug'])
+    );
+
+    if (!slug) {
+      return jsonBadRequest(request, {
+        ok: false,
+        version: 2,
+        codigo: 'SLUG_INVALIDO',
+        mensagem: 'Evento não identificado.',
+      });
+    }
+
+    const result = await eventoV020Load(slug, true);
+
+    if (!result) {
+      return jsonNotFound(request, {
+        ok: false,
+        version: 2,
+        codigo: 'EVENTO_NAO_ENCONTRADO',
+        mensagem: 'Evento não encontrado.',
+      });
+    }
+
+    return ok({
+      headers: {
+        ...getCorsHeaders(request),
+        'Cache-Control':
+          'public, max-age=60, stale-while-revalidate=300',
+      },
+      body: {
+        ok: true,
+        version: 2,
+        event: result.publicEvent,
+      },
+    });
+  } catch (err) {
+    console.error('Erro no endpoint oabEventoPublico:', {
+      mensagem: text(err?.message).slice(0, 180),
+    });
+
+    return jsonServerError(request, {
+      ok: false,
+      version: 2,
+      codigo: 'ERRO_INTERNO',
+      mensagem: 'Não foi possível carregar este evento agora.',
+    });
+  }
+}
+
+/**
+ * POST /_functions/oabEventoRsvp
+ */
+export async function use_oabEventoRsvp(request) {
+  try {
+    if (isOptions(request)) {
+      return jsonOk(request, {
+        ok: true,
+        version: 2,
+        method: 'OPTIONS',
+      });
+    }
+
+    if (!isPost(request)) {
+      return jsonBadRequest(request, {
+        ok: false,
+        version: 2,
+        codigo: 'METODO_NAO_PERMITIDO',
+        mensagem: 'Método não permitido para este endpoint.',
+      });
+    }
+
+    const origin = getRequestOrigin(request);
+
+    if (origin && !isAllowedOrigin(origin)) {
+      return jsonBadRequest(request, {
+        ok: false,
+        version: 2,
+        codigo: 'ORIGEM_NAO_AUTORIZADA',
+        mensagem: 'Origem não autorizada.',
+      });
+    }
+
+    const payload = await readJsonBody(request);
+    const slug = eventoV020Slug(payload?.slug);
+    const values =
+      payload?.values && typeof payload.values === 'object'
+        ? payload.values
+        : {};
+    const email = eventoV020Email(values.email);
+
+    if (!slug) {
+      return jsonBadRequest(request, {
+        ok: false,
+        version: 2,
+        codigo: 'SLUG_INVALIDO',
+        mensagem: 'Evento não identificado.',
+      });
+    }
+
+    const rate = eventoV020RateLimit(
+      eventoPublicoRsvpRateLimit,
+      request,
+      email || slug
+    );
+
+    if (!eventoV020RateLimitAllowed(rate, EVENTO_PUBLICO_RSVP_MAX)) {
+      return jsonBadRequest(request, {
+        ok: false,
+        version: 2,
+        codigo: 'MUITAS_TENTATIVAS',
+        mensagem:
+          'Muitas tentativas foram realizadas em sequência. Aguarde alguns minutos e tente novamente.',
+        retryAfterSeconds: rate.retryAfterSeconds,
+      });
+    }
+
+    const result = await eventoV020Load(slug, false);
+
+    if (!result) {
+      return jsonNotFound(request, {
+        ok: false,
+        version: 2,
+        codigo: 'EVENTO_NAO_ENCONTRADO',
+        mensagem: 'Evento não encontrado.',
+      });
+    }
+
+    if (!result.publicEvent.customRsvpSupported) {
+      return jsonBadRequest(request, {
+        ok: false,
+        version: 2,
+        codigo: 'RSVP_CUSTOM_NAO_SUPORTADO',
+        mensagem:
+          'A inscrição deste evento deve ser concluída no formulário oficial do Wix.',
+      });
+    }
+
+    let rsvpPayload;
+
+    try {
+      rsvpPayload = eventoV020BuildRsvp(
+        result.publicEvent,
+        values,
+        text(payload?.status).toUpperCase() || 'YES'
+      );
+    } catch (validationError) {
+      return jsonBadRequest(request, {
+        ok: false,
+        version: 2,
+        codigo: 'DADOS_INVALIDOS',
+        mensagem:
+          text(validationError?.message) ||
+          'Revise os campos da inscrição.',
+      });
+    }
+
+    const createdResponse = await rsvpV2.createRsvp({
+      rsvp: rsvpPayload,
+    });
+
+    const created =
+      createdResponse?.rsvp ||
+      createdResponse?.entity ||
+      createdResponse;
+
+    return jsonOk(request, {
+      ok: true,
+      version: 2,
+      mensagem:
+        rsvpPayload.status === 'WAITLIST'
+          ? 'Você entrou na lista de espera. Confira seu e-mail para acompanhar as próximas atualizações.'
+          : 'Inscrição confirmada. Confira seu e-mail para as informações do evento.',
+      rsvpId: eventoV020First(created?._id, created?.id),
+      status: text(created?.status || rsvpPayload.status).toUpperCase(),
+      calendarUrls: eventoV020CalendarUrls(
+        createdResponse?.calendarLinks ||
+        createdResponse?.calendarUrls ||
+        {}
+      ),
+    });
+  } catch (err) {
+    console.error('Erro no endpoint oabEventoRsvp:', {
+      mensagem: text(err?.message).slice(0, 180),
+    });
+
+    return jsonServerError(request, {
+      ok: false,
+      version: 2,
+      codigo: 'ERRO_INTERNO',
+      mensagem:
+        'Não foi possível concluir sua inscrição agora. Tente novamente em alguns instantes.',
+    });
+  }
+}
+
+/**
+ * POST /_functions/oabEventoReservarIngressos
+ *
+ * Cria somente a reserva temporária. Dados de participante,
+ * pagamento e meios de pagamento continuam no checkout hospedado
+ * pelo Wix.
+ */
+export async function use_oabEventoReservarIngressos(request) {
+  try {
+    if (isOptions(request)) {
+      return jsonOk(request, {
+        ok: true,
+        version: 2,
+        method: 'OPTIONS',
+      });
+    }
+
+    if (!isPost(request)) {
+      return jsonBadRequest(request, {
+        ok: false,
+        version: 2,
+        codigo: 'METODO_NAO_PERMITIDO',
+        mensagem: 'Método não permitido para este endpoint.',
+      });
+    }
+
+    const origin = getRequestOrigin(request);
+
+    if (origin && !isAllowedOrigin(origin)) {
+      return jsonBadRequest(request, {
+        ok: false,
+        version: 2,
+        codigo: 'ORIGEM_NAO_AUTORIZADA',
+        mensagem: 'Origem não autorizada.',
+      });
+    }
+
+    const payload = await readJsonBody(request);
+    const slug = eventoV020Slug(payload?.slug);
+    const requestedTickets = Array.isArray(payload?.tickets)
+      ? payload.tickets
+      : [];
+
+    if (!slug) {
+      return jsonBadRequest(request, {
+        ok: false,
+        version: 2,
+        codigo: 'SLUG_INVALIDO',
+        mensagem: 'Evento não identificado.',
+      });
+    }
+
+    if (
+      requestedTickets.length === 0 ||
+      requestedTickets.length > 20
+    ) {
+      return jsonBadRequest(request, {
+        ok: false,
+        version: 2,
+        codigo: 'INGRESSOS_INVALIDOS',
+        mensagem: 'Selecione pelo menos um ingresso.',
+      });
+    }
+
+    const rate = eventoV020RateLimit(
+      eventoPublicoReservaRateLimit,
+      request,
+      slug
+    );
+
+    if (!eventoV020RateLimitAllowed(rate, EVENTO_PUBLICO_RESERVA_MAX)) {
+      return jsonBadRequest(request, {
+        ok: false,
+        version: 2,
+        codigo: 'MUITAS_TENTATIVAS',
+        mensagem:
+          'Muitas reservas foram iniciadas em sequência. Aguarde alguns minutos e tente novamente.',
+        retryAfterSeconds: rate.retryAfterSeconds,
+      });
+    }
+
+    const result = await eventoV020Load(slug, true);
+
+    if (!result) {
+      return jsonNotFound(request, {
+        ok: false,
+        version: 2,
+        codigo: 'EVENTO_NAO_ENCONTRADO',
+        mensagem: 'Evento não encontrado.',
+      });
+    }
+
+    const evento = result.publicEvent;
+
+    if (!evento.customTicketingSupported) {
+      return jsonBadRequest(request, {
+        ok: false,
+        version: 2,
+        codigo: 'TICKETING_CUSTOM_NAO_SUPORTADO',
+        mensagem:
+          'A compra deste evento deve ser concluída no checkout oficial do Wix.',
+      });
+    }
+
+    const definitions = new Map(
+      evento.tickets.map((ticket) => [ticket.id, ticket])
+    );
+
+    let totalQuantity = 0;
+    const ticketQuantities = [];
+
+    for (const requested of requestedTickets) {
+      const ticketDefinitionId = eventoV020First(
+        requested?.ticketDefinitionId,
+        requested?.id
+      );
+
+      const quantity = Number(requested?.quantity);
+      const definition = definitions.get(ticketDefinitionId);
+
+      if (
+        !definition ||
+        !definition.supported ||
+        definition.saleStatus !== 'SALE_STARTED' ||
+        !Number.isInteger(quantity) ||
+        quantity < 1
+      ) {
+        return jsonBadRequest(request, {
+          ok: false,
+          version: 2,
+          codigo: 'INGRESSO_INDISPONIVEL',
+          mensagem:
+            'Um dos ingressos selecionados não está disponível. Atualize a página e tente novamente.',
+        });
+      }
+
+      const limit = definition.limitPerCheckout > 0
+        ? Math.min(
+            definition.limitPerCheckout,
+            evento.ticketLimitPerOrder
+          )
+        : evento.ticketLimitPerOrder;
+
+      if (quantity > limit) {
+        return jsonBadRequest(request, {
+          ok: false,
+          version: 2,
+          codigo: 'LIMITE_INGRESSOS',
+          mensagem:
+            `O ingresso “${definition.name}” permite até ${limit} unidade${limit === 1 ? '' : 's'} por pedido.`,
+        });
+      }
+
+      totalQuantity += quantity;
+
+      ticketQuantities.push({
+        ticketDefinitionId,
+        quantity,
+      });
+    }
+
+    if (
+      totalQuantity < 1 ||
+      totalQuantity > evento.ticketLimitPerOrder
+    ) {
+      return jsonBadRequest(request, {
+        ok: false,
+        version: 2,
+        codigo: 'LIMITE_INGRESSOS',
+        mensagem:
+          `Este evento permite até ${evento.ticketLimitPerOrder} ingresso${evento.ticketLimitPerOrder === 1 ? '' : 's'} por pedido.`,
+      });
+    }
+
+    const reservation = await orders.createReservation(
+      evento.id,
+      {
+        ticketQuantities,
+      }
+    );
+
+    const reservationId = eventoV020ReservationId(reservation);
+
+    if (!reservationId) {
+      console.error(
+        'Eventos público: Wix criou resposta de reserva sem ID.',
+        {
+          eventId: evento.id,
+        }
+      );
+
+      return jsonServerError(request, {
+        ok: false,
+        version: 2,
+        codigo: 'RESERVA_SEM_ID',
+        mensagem:
+          'Não foi possível iniciar o checkout agora. Tente novamente.',
+      });
+    }
+
+    const checkoutUrl = eventoV020CheckoutUrl(
+      evento,
+      reservationId
+    );
+
+    if (!checkoutUrl) {
+      try {
+        await orders.cancelReservation(
+          reservationId,
+          evento.id
+        );
+      } catch (cancelError) {
+        console.warn(
+          'Eventos público: não foi possível cancelar reserva sem checkout URL.',
+          {
+            eventId: evento.id,
+            reservationId,
+          }
+        );
+      }
+
+      return jsonServerError(request, {
+        ok: false,
+        version: 2,
+        codigo: 'CHECKOUT_INDISPONIVEL',
+        mensagem:
+          'Não foi possível abrir o checkout agora. Tente novamente.',
+      });
+    }
+
+    return jsonOk(request, {
+      ok: true,
+      version: 2,
+      reservationId,
+      expirationDate: eventoV020ReservationExpiration(reservation),
+      checkoutUrl,
+      mensagem:
+        'Ingressos reservados temporariamente. Continue no checkout seguro para concluir a compra.',
+    });
+  } catch (err) {
+    console.error('Erro no endpoint oabEventoReservarIngressos:', {
+      mensagem: text(err?.message).slice(0, 180),
+    });
+
+    return jsonServerError(request, {
+      ok: false,
+      version: 2,
+      codigo: 'ERRO_INTERNO',
+      mensagem:
+        'Não foi possível reservar os ingressos agora. Atualize a página e tente novamente.',
     });
   }
 }
