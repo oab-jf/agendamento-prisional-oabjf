@@ -47,6 +47,11 @@ test("detalhe público usa slug, formulário e ingressos do Wix", () => {
   );
   assert.match(block, /customRsvpSupported/);
   assert.match(block, /customTicketingSupported/);
+  assert.match(block, /function eventoV020StreetAddress\(address = \{\}\)/);
+  assert.match(block, /address\.formattedAddress/);
+  assert.match(block, /address\.formatted/);
+  assert.match(block, /street\.name/);
+  assert.match(block, /street\.number/);
 });
 
 test("RSVP público usa RSVP V2 atual e valida o formulário oficial", () => {

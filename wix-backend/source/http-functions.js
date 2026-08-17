@@ -6242,6 +6242,44 @@ function eventoV020NativeUrl(event = {}) {
     : '';
 }
 
+function eventoV020StreetAddress(address = {}) {
+  const street = address?.streetAddress;
+
+  if (!street) return '';
+
+  if (typeof street === 'string') {
+    return text(street);
+  }
+
+  if (typeof street !== 'object') {
+    return '';
+  }
+
+  const name = eventoV020First(
+    street.name,
+    street.streetName
+  );
+  const number = eventoV020First(
+    street.number,
+    street.streetNumber
+  );
+  const complement = eventoV020First(
+    street.apt,
+    street.apartment,
+    street.unit
+  );
+
+  const base = [name, number]
+    .filter(Boolean)
+    .join(', ');
+
+  if (!complement) {
+    return base;
+  }
+
+  return `${base}${base ? ' - ' : ''}${complement}`;
+}
+
 function eventoV020LocationAddress(event = {}) {
   const address = event?.location?.address;
 
@@ -6251,15 +6289,47 @@ function eventoV020LocationAddress(event = {}) {
     return text(address);
   }
 
-  return eventoV020First(
+  const formatted = eventoV020First(
     address.formattedAddress,
-    [
-      address.streetAddress,
-      address.city,
-      address.subdivision,
-      address.country,
-    ].filter(Boolean).join(', ')
+    address.formatted,
+    address.fullAddress,
+    address.addressLine
   );
+
+  if (formatted) {
+    return formatted;
+  }
+
+  const street = eventoV020StreetAddress(address);
+  const city = text(address.city);
+  const subdivision = eventoV020First(
+    address.subdivision,
+    address.state,
+    address.region
+  );
+  const postalCode = eventoV020First(
+    address.postalCode,
+    address.zipCode
+  );
+  const country = eventoV020First(
+    address.countryFullname,
+    address.countryName,
+    address.country
+  );
+
+  const locality =
+    city && subdivision
+      ? `${city} - ${subdivision}`
+      : eventoV020First(city, subdivision);
+
+  return [
+    street,
+    locality,
+    postalCode,
+    country,
+  ]
+    .filter(Boolean)
+    .join(', ');
 }
 
 function eventoV020CalendarUrls(event = {}) {
