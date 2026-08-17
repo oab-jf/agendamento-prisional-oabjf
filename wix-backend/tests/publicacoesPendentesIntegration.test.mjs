@@ -28,6 +28,11 @@ test('fila administrativa consulta drafts e exige permissão de formulários', (
 
 test('aprovar usa tarefa CMS oficial de atualização de publish status', () => {
   assert.match(source, /import \{ tasks as cmsTasks \} from '@wix\/data'/);
+  assert.match(source, /import \{ auth \} from '@wix\/essentials'/);
+  assert.match(source, /const criarTarefaCmsElevada = auth\.elevate\(cmsTasks\.createTask\);/);
+  assert.match(source, /const obterTarefaCmsElevada = auth\.elevate\(cmsTasks\.getTask\);/);
+  assert.doesNotMatch(source, /const criarTarefaCmsElevada = elevate\(/);
+  assert.doesNotMatch(source, /const obterTarefaCmsElevada = elevate\(/);
   assert.match(source, /type:\s*'UPDATE_PUBLISH_STATUS'/);
   assert.match(source, /operation:\s*'SCHEDULE_PUBLISHED_STATUS'/);
   assert.match(source, /schedulePublishedStatusOptions:\s*\{ date: scheduledAt \}/);

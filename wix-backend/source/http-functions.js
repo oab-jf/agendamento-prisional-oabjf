@@ -9,6 +9,7 @@ import { wixEventsV2, orders } from 'wix-events.v2';
 import { rsvpV2 } from '@wix/events';
 import { posts } from 'wix-blog-backend';
 import { tasks as cmsTasks } from '@wix/data';
+import { auth } from '@wix/essentials';
 
 import {
   listarDatasDisponiveis,
@@ -237,8 +238,8 @@ const PUBLICACOES_PORTAL_STATUS = {
   PUBLICANDO: 'PUBLICANDO',
   ARQUIVADO: 'ARQUIVADO',
 };
-const criarTarefaCmsElevada = elevate(cmsTasks.createTask);
-const obterTarefaCmsElevada = elevate(cmsTasks.getTask);
+const criarTarefaCmsElevada = auth.elevate(cmsTasks.createTask);
+const obterTarefaCmsElevada = auth.elevate(cmsTasks.getTask);
 
 const DENUNCIA_PROPAGANDA_LIMITS = {
   reporter: 180,
