@@ -7,6 +7,7 @@ import { submissions } from 'wix-forms.v2';
 import { elevate } from 'wix-auth';
 import { wixEventsV2, orders } from 'wix-events.v2';
 import { rsvpV2 } from '@wix/events';
+import { posts } from 'wix-blog-backend';
 
 import {
   listarDatasDisponiveis,
@@ -5924,6 +5925,352 @@ async function carregarNoticiasHome() {
         new Date(a.publishedAt).getTime()
     )
     .slice(0, 4);
+}
+
+function noticiasPublicasNumero(value, fallback, min, max) {
+  const raw = text(value);
+
+  if (!raw) return fallback;
+
+  const number = Number(raw);
+
+  if (!Number.isInteger(number) || number < min || number > max) {
+    return null;
+  }
+
+  return number;
+}
+
+function noticiasPublicasIncludeContent(value) {
+  return ['1', 'true', 'sim', 'yes'].includes(text(value).toLowerCase());
+}
+
+function mapNoticiaPublica(item = {}, options = {}) {
+  const includeContent = options.includeContent === true;
+  const slug = text(item.slug);
+  const legacyPath =
+    text(item.postPageURL) ||
+    text(item.postPageUrl) ||
+    (slug ? `/post/${slug}` : '');
+  const minutesToRead = Number(item.timeToRead);
+  const mapped = {
+    id: text(item.uuid) || text(item._id),
+    slug,
+    title: text(item.title),
+    excerpt: resumirTextoHome(item.excerpt || item.plainContent, 320),
+    publishedAt: dataIsoHome(item.publishedDate || item.lastPublishedDate),
+    imageUrl:
+      item.coverImageDisplayed === false
+        ? ''
+        : normalizarImagemHome(item.coverImage),
+    href: slug ? `/noticias/${encodeURIComponent(slug)}` : normalizarLinkHome(legacyPath),
+    legacyHref: normalizarLinkHome(legacyPath),
+    minutesToRead:
+      Number.isFinite(minutesToRead) && minutesToRead > 0
+        ? Math.round(minutesToRead)
+        : undefined,
+    featured: item.featured === true,
+    pinned: item.pinned === true,
+  };
+
+  if (includeContent) {
+    mapped.contentText = text(item.plainContent);
+    mapped.richContent =
+      item.richContent && typeof item.richContent === 'object'
+        ? item.richContent
+        : null;
+  }
+
+  return mapped;
+}
+
+function noticiaPublicaValida(item = {}) {
+  return (
+    !!item.id &&
+    !!item.slug &&
+    !!item.title &&
+    !!item.publishedAt &&
+    !!item.href
+  );
+}
+
+function mapNoticiaPublicaBlogApi(item = {}) {
+  const slug = text(item.slug);
+  const url = item.url && typeof item.url === 'object' ? item.url : {};
+  const media = item.media && typeof item.media === 'object' ? item.media : {};
+  const wixMedia =
+    media.wixMedia && typeof media.wixMedia === 'object'
+      ? media.wixMedia
+      : {};
+  const legacyPath = text(url.path) || (slug ? `/post/${slug}` : '');
+  const minutesToRead = Number(item.minutesToRead);
+
+  return {
+    id: text(item._id) || text(item.id),
+    slug,
+    title: text(item.title),
+    excerpt: resumirTextoHome(item.excerpt || item.contentText, 320),
+    publishedAt: dataIsoHome(item.firstPublishedDate || item.lastPublishedDate),
+    imageUrl:
+      media.displayed === false
+        ? ''
+        : normalizarImagemHome(wixMedia.image || item.heroImage),
+    href: slug
+      ? `/noticias/${encodeURIComponent(slug)}`
+      : normalizarLinkHome(legacyPath),
+    legacyHref: normalizarLinkHome(legacyPath),
+    minutesToRead:
+      Number.isFinite(minutesToRead) && minutesToRead > 0
+        ? Math.round(minutesToRead)
+        : undefined,
+    featured: item.featured === true,
+    pinned: item.pinned === true,
+    contentText: text(item.contentText),
+    richContent:
+      item.richContent && typeof item.richContent === 'object'
+        ? item.richContent
+        : null,
+  };
+}
+
+async function carregarNoticiasConteudoPublico(options = {}) {
+  const limit = options.limit;
+  const cursor = text(options.cursor);
+  const fieldsets = ['URL', 'CONTENT_TEXT', 'RICH_CONTENT'];
+
+  let query = posts.queryPosts({ fieldsets });
+
+  if (cursor) {
+    query = query.skipTo(cursor).limit(limit);
+  } else {
+    query = query
+      .eq('language', 'pt')
+      .descending('firstPublishedDate')
+      .limit(limit);
+  }
+
+  const [result, totalResult] = await Promise.all([
+    query.find(),
+    posts.getTotalPosts({ language: 'pt' }),
+  ]);
+
+  const items = (result.items || []).map(mapNoticiaPublicaBlogApi);
+  const invalidItem = items.find((item) => !noticiaPublicaValida(item));
+
+  if (invalidItem) {
+    throw new Error(
+      `Wix Blog API contém publicação sem contrato público válido: ${text(invalidItem.id) || 'sem-id'}`
+    );
+  }
+
+  const total = Number(totalResult && totalResult.total);
+  const nextCursor = text(result && result.cursors && result.cursors.next);
+  const hasMore =
+    typeof result.hasNext === 'function'
+      ? result.hasNext()
+      : !!nextCursor;
+
+  return {
+    total: Number.isFinite(total) ? Math.max(0, Math.trunc(total)) : items.length,
+    items,
+    hasMore,
+    nextCursor,
+  };
+}
+
+async function carregarNoticiasPublicas(options = {}) {
+  const offset = options.offset;
+  const limit = options.limit;
+  const includeContent = options.includeContent === true;
+
+  const result = await wixData
+    .query(COL.BLOG_POSTS)
+    .eq('language', 'pt')
+    .descending('publishedDate')
+    .skip(offset)
+    .limit(limit)
+    .find({ suppressAuth: true });
+
+  const rawItems = result.items || [];
+  const items = rawItems.map((item) =>
+    mapNoticiaPublica(item, { includeContent })
+  );
+  const invalidItem = items.find((item) => !noticiaPublicaValida(item));
+
+  if (invalidItem) {
+    throw new Error(
+      `Blog/Posts contém publicação sem contrato público válido: ${text(invalidItem.id) || 'sem-id'}`
+    );
+  }
+
+  const totalCount = Number(result.totalCount);
+  const total = Number.isFinite(totalCount)
+    ? Math.max(0, Math.trunc(totalCount))
+    : offset + rawItems.length;
+
+  return {
+    total,
+    items,
+    hasMore: offset + rawItems.length < total,
+  };
+}
+
+/**
+ * GET /_functions/oabNoticias
+ *
+ * Lista notícias publicadas do Wix Blog (Blog/Posts).
+ * O endpoint é paginado e só inclui richContent quando includeContent=1.
+ * A coleção CMS News permanece reservada ao Espaço Estágio, Emprego e Oportunidades.
+ */
+export async function use_oabNoticias(request) {
+  try {
+    if (isOptions(request)) {
+      return jsonOk(request, {
+        ok: true,
+        version: 1,
+        method: 'OPTIONS',
+      });
+    }
+
+    if (!isGet(request)) {
+      return jsonBadRequest(request, {
+        ok: false,
+        version: 1,
+        codigo: 'METODO_NAO_PERMITIDO',
+        mensagem: 'Método não permitido para este endpoint.',
+      });
+    }
+
+    const offset = noticiasPublicasNumero(
+      getQueryParam(request, 'offset'),
+      0,
+      0,
+      100000
+    );
+    const limit = noticiasPublicasNumero(
+      getQueryParam(request, 'limit'),
+      50,
+      1,
+      100
+    );
+
+    if (offset === null || limit === null) {
+      return jsonBadRequest(request, {
+        ok: false,
+        version: 1,
+        codigo: 'PAGINACAO_INVALIDA',
+        mensagem: 'offset deve ser inteiro >= 0 e limit deve estar entre 1 e 100.',
+      });
+    }
+
+    const includeContent = noticiasPublicasIncludeContent(
+      getQueryParam(request, ['includeContent', 'include_content'])
+    );
+    const result = await carregarNoticiasPublicas({
+      offset,
+      limit,
+      includeContent,
+    });
+
+    return ok({
+      headers: {
+        ...getCorsHeaders(request),
+        'Cache-Control': 'public, max-age=180, stale-while-revalidate=900',
+      },
+      body: {
+        ok: true,
+        version: 1,
+        generatedAt: new Date().toISOString(),
+        total: result.total,
+        offset,
+        limit,
+        hasMore: result.hasMore,
+        items: result.items,
+      },
+    });
+  } catch (err) {
+    console.error('Erro no endpoint oabNoticias:', err);
+
+    return jsonServerError(request, {
+      ok: false,
+      version: 1,
+      codigo: 'ERRO_INTERNO',
+      mensagem: 'Não foi possível carregar as notícias agora.',
+    });
+  }
+}
+
+/**
+ * GET /_functions/oabNoticiasConteudo
+ *
+ * Entrega o conteúdo integral das notícias usando a API oficial do Wix Blog.
+ * O fieldset RICH_CONTENT é obrigatório para que o corpo completo do post seja
+ * retornado; Blog/Posts continua sendo usado pela listagem leve e pela Home.
+ */
+export async function use_oabNoticiasConteudo(request) {
+  try {
+    if (isOptions(request)) {
+      return jsonOk(request, {
+        ok: true,
+        version: 1,
+        method: 'OPTIONS',
+      });
+    }
+
+    if (!isGet(request)) {
+      return jsonBadRequest(request, {
+        ok: false,
+        version: 1,
+        codigo: 'METODO_NAO_PERMITIDO',
+        mensagem: 'Método não permitido para este endpoint.',
+      });
+    }
+
+    const limit = noticiasPublicasNumero(
+      getQueryParam(request, 'limit'),
+      50,
+      1,
+      100
+    );
+
+    if (limit === null) {
+      return jsonBadRequest(request, {
+        ok: false,
+        version: 1,
+        codigo: 'PAGINACAO_INVALIDA',
+        mensagem: 'limit deve estar entre 1 e 100.',
+      });
+    }
+
+    const cursor = text(getQueryParam(request, 'cursor'));
+    const result = await carregarNoticiasConteudoPublico({ limit, cursor });
+
+    return ok({
+      headers: {
+        ...getCorsHeaders(request),
+        'Cache-Control': 'public, max-age=180, stale-while-revalidate=900',
+      },
+      body: {
+        ok: true,
+        version: 1,
+        generatedAt: new Date().toISOString(),
+        total: result.total,
+        limit,
+        hasMore: result.hasMore,
+        nextCursor: result.nextCursor || undefined,
+        items: result.items,
+      },
+    });
+  } catch (err) {
+    console.error('Erro no endpoint oabNoticiasConteudo:', err);
+
+    return jsonServerError(request, {
+      ok: false,
+      version: 1,
+      codigo: 'ERRO_INTERNO',
+      mensagem: 'Não foi possível carregar o conteúdo completo das notícias agora.',
+    });
+  }
 }
 
 async function carregarEventosHome() {
