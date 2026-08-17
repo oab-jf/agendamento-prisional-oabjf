@@ -8,6 +8,7 @@ import { elevate } from 'wix-auth';
 import { wixEventsV2, orders } from 'wix-events.v2';
 import { rsvpV2 } from '@wix/events';
 import { posts } from 'wix-blog-backend';
+import { tasks as cmsTasks } from '@wix/data';
 
 import {
   listarDatasDisponiveis,
@@ -228,6 +229,16 @@ const FORMULARIOS_GESTAO_PERMISSIONS = {
   OPERAR: 'formularios.operar',
   ANEXOS: 'formularios.anexos',
 };
+
+const PUBLICACOES_PENDENTES_DOWNLOAD_MINUTES = 10;
+const PUBLICACOES_PENDENTES_MAX_RESULTS = 100;
+const PUBLICACOES_PORTAL_STATUS = {
+  PENDENTE: 'PENDENTE',
+  PUBLICANDO: 'PUBLICANDO',
+  ARQUIVADO: 'ARQUIVADO',
+};
+const criarTarefaCmsElevada = elevate(cmsTasks.createTask);
+const obterTarefaCmsElevada = elevate(cmsTasks.getTask);
 
 const DENUNCIA_PROPAGANDA_LIMITS = {
   reporter: 180,
@@ -3243,6 +3254,7 @@ async function criarCadastroCorrespondente(dados) {
       uf: dados.uf,
       areaDeAtuacao: dados.areas,
       aceiteTermos: true,
+      portalStatus: PUBLICACOES_PORTAL_STATUS.PENDENTE,
     },
     { suppressAuth: true }
   );
@@ -3406,6 +3418,7 @@ async function criarCadastroOportunidade(dados, curriculoUrl) {
     aceiteTermosDeUso: true,
     vencimento: calcularVencimentoOportunidade(),
     status: 'Pendente',
+    portalStatus: PUBLICACOES_PORTAL_STATUS.PENDENTE,
   };
 
   if (dados.externalUrl) {
@@ -3778,6 +3791,7 @@ async function carregarCorrespondentesPublicos() {
   const cmsItems = await consultarTodosItensWix(() =>
     wixData
       .query(COL.CORRESPONDENTES)
+      .eq('_publishStatus', 'PUBLISHED')
       .eq('aceiteTermos', true)
       .ascending('nomeCompleto')
   );
@@ -3799,6 +3813,7 @@ async function carregarOportunidadesPublicas() {
   const cmsItems = await consultarTodosItensWix(() =>
     wixData
       .query(COL.OPORTUNIDADES)
+      .eq('_publishStatus', 'PUBLISHED')
       .eq('aceiteTermosDeUso', true)
       .ge('vencimento', now)
       .descending('_createdDate')
@@ -9912,6 +9927,543 @@ export async function use_oabAdminMe(request) {
 }
 
 
+
+
+// ============================================================
+// Portal de Gestão — Publicações pendentes
+// ============================================================
+
+function normalizarListaPublicacaoAdmin(value) {
+  if (Array.isArray(value)) {
+    return value.map(text).filter(Boolean);
+  }
+
+  const raw = text(value);
+  if (!raw) return [];
+
+  return raw
+    .split(/[;,|]/)
+    .map((item) => text(item))
+    .filter(Boolean);
+}
+
+function normalizarStatusPortalPublicacao(value) {
+  const status = text(value).trim().toUpperCase();
+
+  if (status === PUBLICACOES_PORTAL_STATUS.PUBLICANDO) {
+    return PUBLICACOES_PORTAL_STATUS.PUBLICANDO;
+  }
+
+  if (status === PUBLICACOES_PORTAL_STATUS.ARQUIVADO) {
+    return PUBLICACOES_PORTAL_STATUS.ARQUIVADO;
+  }
+
+  return PUBLICACOES_PORTAL_STATUS.PENDENTE;
+}
+
+function mapCorrespondentePendenteAdmin(item = {}) {
+  return {
+    id: text(item._id),
+    kind: 'correspondente',
+    title: text(item.nomeCompleto) || 'Correspondente sem nome',
+    subtitle: [text(item.cidade), text(item.uf).toUpperCase()]
+      .filter(Boolean)
+      .join(' / '),
+    createdAt: normalizarDataIsoPublica(item._createdDate),
+    updatedAt: normalizarDataIsoPublica(item._updatedDate),
+    publishStatus: 'DRAFT',
+    portalStatus: normalizarStatusPortalPublicacao(item.portalStatus),
+    correspondent: {
+      name: text(item.nomeCompleto),
+      oab: text(item.oab),
+      phone: text(item.telefone),
+      email: normalizeEmail(item.eMail),
+      address: text(item.endereco),
+      city: text(item.cidade),
+      uf: text(item.uf).toUpperCase().slice(0, 2),
+      areas: normalizarListaPublicacaoAdmin(item.areaDeAtuacao),
+    },
+    opportunity: null,
+  };
+}
+
+function mapOportunidadePendenteAdmin(item = {}) {
+  return {
+    id: text(item._id),
+    kind: 'oportunidade',
+    title: text(item.title) || 'Oportunidade sem título',
+    subtitle: [text(item.cidade), text(item.uf).toUpperCase()]
+      .filter(Boolean)
+      .join(' / '),
+    createdAt: normalizarDataIsoPublica(item._createdDate),
+    updatedAt: normalizarDataIsoPublica(item._updatedDate),
+    publishStatus: 'DRAFT',
+    portalStatus: normalizarStatusPortalPublicacao(item.portalStatus),
+    correspondent: null,
+    opportunity: {
+      title: text(item.title),
+      contactName: text(item.nomePessoaOuEmpresa),
+      phone: text(item.telefone),
+      email: normalizeEmail(item.email),
+      city: text(item.cidade),
+      uf: text(item.uf).toUpperCase().slice(0, 2),
+      area: text(item.area),
+      types: normalizarListaPublicacaoAdmin(item.tipo),
+      modalities: normalizarListaPublicacaoAdmin(item.modalidade),
+      description: text(item.descrioCurta),
+      externalUrl: normalizarUrlPublica(item.currculo),
+      hasResume: /^wix:document:\/\/v1\//i.test(text(item.curriculo)),
+      expiresAt: normalizarDataIsoPublica(item.vencimento),
+    },
+  };
+}
+
+async function reconciliarPublicacaoPendenteAdmin(collectionId, kind, item) {
+  if (
+    normalizarStatusPortalPublicacao(item.portalStatus) !==
+    PUBLICACOES_PORTAL_STATUS.PUBLICANDO
+  ) {
+    return item;
+  }
+
+  const taskId = text(item.portalPublicacaoTaskId);
+  const task = taskId ? await consultarTarefaPublicacaoCms(taskId) : null;
+  const taskStatus = text(task && task.status).toUpperCase();
+
+  if (taskStatus === 'COMPLETED') {
+    // O item pode ainda aparecer como DRAFT por consistência eventual.
+    // Não o devolvemos à fila depois que a tarefa confirmou sucesso.
+    return null;
+  }
+
+  if (['FAILED', 'CANCELLED'].includes(taskStatus)) {
+    return salvarEstadoPortalPublicacao(
+      { collectionId, kind, id: text(item._id) },
+      item,
+      {
+        portalStatus: PUBLICACOES_PORTAL_STATUS.PENDENTE,
+        portalPublicacaoTaskId: '',
+        portalPublicacaoFalhouEm: new Date(),
+      }
+    );
+  }
+
+  const requestedAt = new Date(item.portalPublicacaoSolicitadaEm || 0).getTime();
+  const stale =
+    !taskId &&
+    Number.isFinite(requestedAt) &&
+    requestedAt > 0 &&
+    Date.now() - requestedAt > 10 * 60 * 1000;
+
+  if (stale) {
+    return salvarEstadoPortalPublicacao(
+      { collectionId, kind, id: text(item._id) },
+      item,
+      {
+        portalStatus: PUBLICACOES_PORTAL_STATUS.PENDENTE,
+        portalPublicacaoTaskId: '',
+      }
+    );
+  }
+
+  return item;
+}
+
+async function carregarPublicacoesPendentesAdmin() {
+  const [correspondentesRaw, oportunidadesRaw] = await Promise.all([
+    wixData
+      .query(COL.CORRESPONDENTES)
+      .eq('_publishStatus', 'DRAFT')
+      .descending('_createdDate')
+      .limit(PUBLICACOES_PENDENTES_MAX_RESULTS)
+      .find({ suppressAuth: true }),
+    wixData
+      .query(COL.OPORTUNIDADES)
+      .eq('_publishStatus', 'DRAFT')
+      .descending('_createdDate')
+      .limit(PUBLICACOES_PENDENTES_MAX_RESULTS)
+      .find({ suppressAuth: true }),
+  ]);
+
+  const correspondentesReconciliados = await Promise.all(
+    (correspondentesRaw.items || [])
+      .filter((item) => normalizarStatusPortalPublicacao(item.portalStatus) !== PUBLICACOES_PORTAL_STATUS.ARQUIVADO)
+      .map((item) =>
+        reconciliarPublicacaoPendenteAdmin(
+          COL.CORRESPONDENTES,
+          'correspondente',
+          item
+        )
+      )
+  );
+  const oportunidadesReconciliadas = await Promise.all(
+    (oportunidadesRaw.items || [])
+      .filter((item) => normalizarStatusPortalPublicacao(item.portalStatus) !== PUBLICACOES_PORTAL_STATUS.ARQUIVADO)
+      .map((item) =>
+        reconciliarPublicacaoPendenteAdmin(
+          COL.OPORTUNIDADES,
+          'oportunidade',
+          item
+        )
+      )
+  );
+
+  const correspondentes = correspondentesReconciliados
+    .filter(Boolean)
+    .map(mapCorrespondentePendenteAdmin);
+  const oportunidades = oportunidadesReconciliadas
+    .filter(Boolean)
+    .map(mapOportunidadePendenteAdmin);
+
+  const items = [...correspondentes, ...oportunidades].sort((a, b) => {
+    return new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime();
+  });
+
+  return {
+    items,
+    summary: {
+      total: items.length,
+      correspondentes: correspondentes.length,
+      oportunidades: oportunidades.length,
+      publicando: items.filter((item) => item.portalStatus === PUBLICACOES_PORTAL_STATUS.PUBLICANDO).length,
+    },
+  };
+}
+
+function resolverPublicacaoPendente(kind, id) {
+  const safeKind = text(kind).trim().toLowerCase();
+  const safeId = text(id);
+
+  if (!safeId) return null;
+
+  if (safeKind === 'correspondente') {
+    return { kind: safeKind, id: safeId, collectionId: COL.CORRESPONDENTES };
+  }
+
+  if (safeKind === 'oportunidade') {
+    return { kind: safeKind, id: safeId, collectionId: COL.OPORTUNIDADES };
+  }
+
+  return null;
+}
+
+async function obterPublicacaoPendenteAdmin(target) {
+  if (!target) return null;
+  const item = await wixData.get(target.collectionId, target.id, { suppressAuth: true });
+  if (!item || text(item._publishStatus).toUpperCase() !== 'DRAFT') return null;
+  return item;
+}
+
+function dadosRevisaoPublicacao(acesso) {
+  return {
+    portalRevisadoEm: new Date(),
+    portalRevisadoPor: text(acesso?.admin?.nome || acesso?.admin?.email || 'Administrador'),
+    portalRevisadoPorEmail: normalizeEmail(acesso?.admin?.email),
+  };
+}
+
+async function salvarEstadoPortalPublicacao(target, item, patch) {
+  return wixData.update(
+    target.collectionId,
+    {
+      ...item,
+      ...patch,
+    },
+    { suppressAuth: true }
+  );
+}
+
+async function criarTarefaPublicacaoCms(target) {
+  const scheduledAt = new Date(Date.now() + 3000).toISOString();
+  const task = await criarTarefaCmsElevada({
+    type: 'UPDATE_PUBLISH_STATUS',
+    updatePublishStatusOptions: {
+      dataCollectionId: target.collectionId,
+      filter: { _id: target.id },
+      operation: 'SCHEDULE_PUBLISHED_STATUS',
+      schedulePublishedStatusOptions: { date: scheduledAt },
+    },
+  });
+
+  return {
+    taskId: text(task && (task._id || task.id)),
+    scheduledAt,
+  };
+}
+
+async function consultarTarefaPublicacaoCms(taskId) {
+  const safeTaskId = text(taskId);
+  if (!safeTaskId) return null;
+
+  try {
+    return await obterTarefaCmsElevada(safeTaskId);
+  } catch (err) {
+    console.warn('Não foi possível consultar tarefa CMS de publicação:', safeTaskId, normalizarMensagemErroApi(err));
+    return null;
+  }
+}
+
+export async function use_oabAdminPublicacoesPendentes(request) {
+  try {
+    if (isOptions(request)) {
+      return jsonOk(request, { ok: true, method: 'OPTIONS' });
+    }
+
+    if (!isGet(request)) {
+      return jsonBadRequest(request, {
+        ok: false,
+        codigo: 'METODO_NAO_PERMITIDO',
+        mensagem: 'Método não permitido para este endpoint.',
+      });
+    }
+
+    const acesso = await validarAcessoAdminFormularios(
+      request,
+      [FORMULARIOS_GESTAO_PERMISSIONS.VER]
+    );
+
+    if (!acesso.ok) return acesso.response;
+
+    const data = await carregarPublicacoesPendentesAdmin();
+
+    return jsonOk(request, {
+      ok: true,
+      version: 1,
+      ...data,
+      permissions: {
+        canOperate: acesso.podeOperar,
+        canOpenAttachments: acesso.podeAbrirAnexos,
+      },
+    });
+  } catch (err) {
+    console.error('Erro no endpoint oabAdminPublicacoesPendentes:', err);
+    return jsonServerError(request, {
+      ok: false,
+      codigo: 'ERRO_INTERNO',
+      mensagem: 'Não foi possível carregar as publicações pendentes agora.',
+    });
+  }
+}
+
+export async function use_oabAdminPublicacaoAcao(request) {
+  try {
+    if (isOptions(request)) {
+      return jsonOk(request, { ok: true, method: 'OPTIONS' });
+    }
+
+    if (!isPost(request)) {
+      return jsonBadRequest(request, {
+        ok: false,
+        codigo: 'METODO_NAO_PERMITIDO',
+        mensagem: 'Método não permitido para este endpoint.',
+      });
+    }
+
+    const acesso = await validarAcessoAdminFormularios(
+      request,
+      [
+        FORMULARIOS_GESTAO_PERMISSIONS.VER,
+        FORMULARIOS_GESTAO_PERMISSIONS.OPERAR,
+      ]
+    );
+
+    if (!acesso.ok) return acesso.response;
+
+    const payload = await readJsonBody(request);
+    const target = resolverPublicacaoPendente(payload?.kind, payload?.id);
+    const action = text(payload?.action).trim().toUpperCase();
+
+    if (!target || !['PUBLICAR', 'ARQUIVAR'].includes(action)) {
+      return jsonBadRequest(request, {
+        ok: false,
+        codigo: 'DADOS_INVALIDOS',
+        mensagem: 'Informe um cadastro pendente e uma ação válida.',
+      });
+    }
+
+    const item = await obterPublicacaoPendenteAdmin(target);
+
+    if (!item) {
+      return jsonNotFound(request, {
+        ok: false,
+        codigo: 'PUBLICACAO_NAO_ENCONTRADA',
+        mensagem: 'O cadastro pendente não foi encontrado ou já foi publicado.',
+      });
+    }
+
+    if (action === 'ARQUIVAR') {
+      await salvarEstadoPortalPublicacao(target, item, {
+        portalStatus: PUBLICACOES_PORTAL_STATUS.ARQUIVADO,
+        ...dadosRevisaoPublicacao(acesso),
+      });
+
+      return jsonOk(request, {
+        ok: true,
+        version: 1,
+        action,
+        id: target.id,
+        kind: target.kind,
+        status: 'ARQUIVADO',
+        message: 'Cadastro arquivado sem publicação. O registro foi preservado no CMS.',
+      });
+    }
+
+    const taskIdAnterior = text(item.portalPublicacaoTaskId);
+    if (taskIdAnterior) {
+      const taskAnterior = await consultarTarefaPublicacaoCms(taskIdAnterior);
+      const statusAnterior = text(taskAnterior && taskAnterior.status).toUpperCase();
+
+      if (
+        taskAnterior &&
+        !['COMPLETED', 'FAILED', 'CANCELLED'].includes(statusAnterior)
+      ) {
+        return jsonOk(request, {
+          ok: true,
+          version: 1,
+          action,
+          id: target.id,
+          kind: target.kind,
+          taskId: taskIdAnterior,
+          status: 'PUBLICANDO',
+          message: 'A publicação deste cadastro já está em processamento.',
+        });
+      }
+    }
+
+    const marcado = await salvarEstadoPortalPublicacao(target, item, {
+      portalStatus: PUBLICACOES_PORTAL_STATUS.PUBLICANDO,
+      portalPublicacaoSolicitadaEm: new Date(),
+      portalPublicacaoTaskId: '',
+      ...dadosRevisaoPublicacao(acesso),
+    });
+
+    let tarefa;
+    try {
+      tarefa = await criarTarefaPublicacaoCms(target);
+    } catch (taskError) {
+      await salvarEstadoPortalPublicacao(target, marcado, {
+        portalStatus: PUBLICACOES_PORTAL_STATUS.PENDENTE,
+        portalPublicacaoTaskId: '',
+      });
+      throw taskError;
+    }
+
+    if (tarefa.taskId) {
+      try {
+        await salvarEstadoPortalPublicacao(target, marcado, {
+          portalStatus: PUBLICACOES_PORTAL_STATUS.PUBLICANDO,
+          portalPublicacaoTaskId: tarefa.taskId,
+          portalPublicacaoAgendadaPara: tarefa.scheduledAt,
+        });
+      } catch (metadataError) {
+        console.warn(
+          'Publicação CMS criada, mas os metadados da tarefa não puderam ser salvos:',
+          tarefa.taskId,
+          normalizarMensagemErroApi(metadataError)
+        );
+      }
+    }
+
+    return jsonOk(request, {
+      ok: true,
+      version: 1,
+      action,
+      id: target.id,
+      kind: target.kind,
+      taskId: tarefa.taskId,
+      status: 'PUBLICANDO',
+      message: 'Cadastro aprovado. A publicação no site foi agendada e deve concluir em alguns segundos.',
+    });
+  } catch (err) {
+    console.error('Erro no endpoint oabAdminPublicacaoAcao:', err);
+    return jsonServerError(request, {
+      ok: false,
+      codigo: 'ERRO_INTERNO',
+      mensagem: 'Não foi possível concluir a ação de publicação agora.',
+    });
+  }
+}
+
+export async function use_oabAdminOportunidadeCurriculo(request) {
+  try {
+    if (isOptions(request)) {
+      return jsonOk(request, { ok: true, method: 'OPTIONS' });
+    }
+
+    if (!isPost(request)) {
+      return jsonBadRequest(request, {
+        ok: false,
+        codigo: 'METODO_NAO_PERMITIDO',
+        mensagem: 'Método não permitido para este endpoint.',
+      });
+    }
+
+    const acesso = await validarAcessoAdminFormularios(
+      request,
+      [
+        FORMULARIOS_GESTAO_PERMISSIONS.VER,
+        FORMULARIOS_GESTAO_PERMISSIONS.ANEXOS,
+      ]
+    );
+
+    if (!acesso.ok) return acesso.response;
+
+    const payload = await readJsonBody(request);
+    const target = resolverPublicacaoPendente('oportunidade', payload?.id);
+    const item = await obterPublicacaoPendenteAdmin(target);
+
+    if (!item) {
+      return jsonNotFound(request, {
+        ok: false,
+        codigo: 'PUBLICACAO_NAO_ENCONTRADA',
+        mensagem: 'A oportunidade pendente não foi encontrada.',
+      });
+    }
+
+    const fileUrl = text(item.curriculo);
+    if (!/^wix:document:\/\/v1\//i.test(fileUrl)) {
+      return jsonNotFound(request, {
+        ok: false,
+        codigo: 'CURRICULO_NAO_ENCONTRADO',
+        mensagem: 'Esta oportunidade não possui currículo privado anexado.',
+      });
+    }
+
+    const info = await mediaManager.getFileInfo(fileUrl);
+    const name = text(info && (info.originalFileName || info.fileName)) || 'curriculo-oportunidade';
+    const url = await mediaManager.getDownloadUrl(
+      fileUrl,
+      PUBLICACOES_PENDENTES_DOWNLOAD_MINUTES,
+      name,
+      null
+    );
+
+    if (!url) {
+      return jsonServerError(request, {
+        ok: false,
+        codigo: 'URL_DOWNLOAD_NAO_GERADA',
+        mensagem: 'Não foi possível gerar o acesso seguro ao currículo.',
+      });
+    }
+
+    return jsonOk(request, {
+      ok: true,
+      version: 1,
+      attachment: {
+        name,
+        url,
+        expiresInMinutes: PUBLICACOES_PENDENTES_DOWNLOAD_MINUTES,
+      },
+    });
+  } catch (err) {
+    console.error('Erro no endpoint oabAdminOportunidadeCurriculo:', err);
+    return jsonServerError(request, {
+      ok: false,
+      codigo: 'ERRO_INTERNO',
+      mensagem: 'Não foi possível abrir o currículo privado agora.',
+    });
+  }
+}
 
 // ============================================================
 // Portal de Gestão — Formulários e Denúncias
