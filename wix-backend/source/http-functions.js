@@ -5946,6 +5946,179 @@ async function carregarEventosHome() {
 }
 
 
+// ============================================================
+// Site público — agenda completa de Eventos
+// ============================================================
+
+function eventoPublicoFormato(item = {}) {
+  const textoLocal = [
+    text(item.locationName),
+    text(item.locationAddress),
+  ]
+    .join(' ')
+    .toLowerCase();
+
+  if (
+    textoLocal.includes('online') ||
+    textoLocal.includes('virtual') ||
+    textoLocal.includes('zoom') ||
+    textoLocal.includes('meet')
+  ) {
+    return 'ONLINE';
+  }
+
+  return 'PRESENCIAL';
+}
+
+function mapEventoPublico(item = {}) {
+  const slug = text(item.slug);
+  const fallbackPath = slug ? `/event-details/${slug}` : '';
+  const detalhePath = text(item.siteEventPageUrl) || fallbackPath;
+  const startAt = dataIsoHome(item.start);
+  const endAt = dataIsoHome(item.end);
+  const status = text(item.status).toUpperCase();
+  const registrationType = text(item.type).toUpperCase() || 'NONE';
+  const registrationStatus = text(item.registrationStatus).toUpperCase();
+  const now = Date.now();
+
+  const endTime = endAt ? new Date(endAt).getTime() : NaN;
+  const startTime = startAt ? new Date(startAt).getTime() : NaN;
+
+  return {
+    id: text(item._id),
+    title: text(item.title),
+    slug,
+    shortDescription: text(item.description),
+    startAt,
+    endAt,
+    dateLabel: text(item.scheduleStartDateFormatted),
+    timeLabel: text(item.scheduleStartTimeFormatted),
+    scheduleLabel: text(item.scheduleFormatted),
+    location: text(item.locationName) || 'Local a confirmar',
+    locationAddress: text(item.locationAddress),
+    imageUrl: normalizarImagemHome(item.mainImage),
+    href: normalizarLinkHome(detalhePath),
+    registrationUrl: normalizarLinkHome(item.registrationURL),
+    registrationType,
+    registrationStatus,
+    lowestPriceFormatted: text(item.lowestPriceFormatted),
+    highestPriceFormatted: text(item.highestPriceFormatted),
+    status,
+    format: eventoPublicoFormato(item),
+    past:
+      status === 'ENDED' ||
+      (Number.isFinite(endTime) && endTime < now) ||
+      (
+        !Number.isFinite(endTime) &&
+        Number.isFinite(startTime) &&
+        startTime < now &&
+        status !== 'STARTED'
+      ),
+  };
+}
+
+function eventoPublicoValido(item = {}) {
+  const title = text(item.title);
+  const status = text(item.status).toUpperCase();
+
+  return (
+    !!item.id &&
+    !!title &&
+    !!item.href &&
+    status !== 'CANCELED' &&
+    !title.toUpperCase().includes('TESTE INTERNO')
+  );
+}
+
+async function carregarEventosPublicos() {
+  const result = await wixData
+    .query(COL.EVENTS)
+    .descending('start')
+    .limit(500)
+    .find({ suppressAuth: true });
+
+  const items = (result.items || [])
+    .map(mapEventoPublico)
+    .filter(eventoPublicoValido);
+
+  const upcoming = items
+    .filter((item) => !item.past)
+    .sort(
+      (a, b) =>
+        new Date(a.startAt || 0).getTime() -
+        new Date(b.startAt || 0).getTime()
+    );
+
+  const past = items
+    .filter((item) => item.past)
+    .sort(
+      (a, b) =>
+        new Date(b.startAt || 0).getTime() -
+        new Date(a.startAt || 0).getTime()
+    );
+
+  return {
+    items: [...upcoming, ...past],
+    upcomingCount: upcoming.length,
+    pastCount: past.length,
+  };
+}
+
+/**
+ * GET /_functions/oabEventosPublicos
+ *
+ * Agenda pública completa baseada em Events/Events.
+ * Não expõe participantes, pedidos ou qualquer informação administrativa.
+ */
+export async function use_oabEventosPublicos(request) {
+  try {
+    if (isOptions(request)) {
+      return jsonOk(request, {
+        ok: true,
+        version: 1,
+        method: 'OPTIONS',
+      });
+    }
+
+    if (!isGet(request)) {
+      return jsonBadRequest(request, {
+        ok: false,
+        version: 1,
+        codigo: 'METODO_NAO_PERMITIDO',
+        mensagem: 'Método não permitido para este endpoint.',
+      });
+    }
+
+    const result = await carregarEventosPublicos();
+
+    return ok({
+      headers: {
+        ...getCorsHeaders(request),
+        'Cache-Control': 'public, max-age=180, stale-while-revalidate=900',
+      },
+      body: {
+        ok: true,
+        version: 1,
+        generatedAt: new Date().toISOString(),
+        total: result.items.length,
+        upcomingCount: result.upcomingCount,
+        pastCount: result.pastCount,
+        items: result.items,
+      },
+    });
+  } catch (err) {
+    console.error('Erro no endpoint oabEventosPublicos:', err);
+
+    return jsonServerError(request, {
+      ok: false,
+      version: 1,
+      codigo: 'ERRO_INTERNO',
+      mensagem: 'Não foi possível carregar a agenda de eventos agora.',
+    });
+  }
+}
+
+
 /**
  * GET /_functions/oabHome
  *
