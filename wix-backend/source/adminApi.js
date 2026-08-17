@@ -2,6 +2,7 @@ import wixData from 'wix-data';
 import { getSecret } from 'wix-secrets-backend';
 import { fetch } from 'wix-fetch';
 import { elevate } from 'wix-auth';
+import { mediaManager } from 'wix-media-backend';
 import { orders } from 'wix-events.v2';
 
 import {
@@ -41,6 +42,7 @@ const COL = {
   ADMIN_LOGS: 'Import4261',
   BLOQUEIOS_AGENDA: 'Import4256',
   DESTAQUES_HOME: 'DestaquesHome',
+  PAGINAS_INSTITUCIONAIS: 'PaginasInstitucionais',
 };
 
 const ADMIN_SECRETS = {
@@ -61,6 +63,11 @@ const INFOBIP_EMAIL_ENDPOINT = '/email/3/send';
 const CENTRAL_PUBLIC_URL = 'https://central.juizdefora-oabmg.org.br';
 const LEGACY_ADMIN_ID = 'legacy-secret-admin';
 const AGENDAMENTOS_SHADOW_READ_ENABLED = true;
+const SITE_EDITOR_IMAGE_MAX_BYTES = 8 * 1024 * 1024;
+const SITE_EDITOR_IMAGE_MIME_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp']);
+const HOME_BANNERS_MAX_ACTIVE = 5;
+const HOME_BANNERS_MAX_TOTAL = 20;
+const SITE_EDITOR_BANNER_FOLDER = '/oab-jf/site/banners';
 const obterResumoVendasEventoElevado = elevate(orders.getSummary);
 const listarPedidosEventoElevado = elevate(orders.listOrders);
 
@@ -3692,41 +3699,52 @@ function siteEditorPageId(item = {}) {
   return `home:${text(item._id)}`;
 }
 
-function mapHomeSiteEditorDocument(item = {}) {
+function mapHomeSiteEditorDocument(item = {}, index = 0, total = 1) {
   const desktop = siteEditorImageUrl(item.imagemDesktop);
-  const mobile = siteEditorImageUrl(item.imagemMobile) || desktop;
-  const imageAlt = text(item.imagemAlt) || text(item.titulo);
+  const mobile = siteEditorImageUrl(item.imagemMobile);
+  const imageAlt = text(item.imagemAlt);
+  const title = text(item.titulo) || `Banner ${index + 1}`;
 
   return {
     id: siteEditorPageId(item),
-    label: 'Página inicial',
+    label: `Home - Banner ${String(index + 1).padStart(2, '0')} - ${title}`,
     path: '/',
     sourceUrl: SITE_EDITOR_PUBLIC_URL,
     sourceRevision: siteEditorRevision(item),
+    meta: {
+      kind: 'home-banner',
+      position: index + 1,
+      total,
+      active: item.ativo === true,
+      priority: Number(item.prioridade) || 0,
+    },
     sections: [
       {
         id: 'hero',
-        label: 'Destaque principal',
+        label: 'Banner da Home',
         description:
-          'Mensagem editorial principal exibida no topo da página inicial.',
-        visible: item.ativo !== false,
-        visibilityEditable: false,
+          'Arte e conteúdo de um destaque da sequência editorial da página inicial.',
+        visible: item.ativo === true,
+        visibilityEditable: true,
         fields: [
           {
             kind: 'text',
             id: 'hero.title',
-            label: 'Título',
-            value: text(item.titulo),
+            label: 'Identificação / título',
+            value: title,
             required: true,
             maxLength: 100,
+            help:
+              'Serve para identificar o banner no painel. Quando houver texto de apoio ou botão, também funciona como título público.',
           },
           {
             kind: 'textarea',
             id: 'hero.body',
             label: 'Texto de apoio',
             value: text(item.chamada),
-            required: true,
+            required: false,
             maxLength: 420,
+            help: 'Opcional. Uma arte pode funcionar sozinha, sem bloco de texto.',
           },
           {
             kind: 'image',
@@ -3734,9 +3752,10 @@ function mapHomeSiteEditorDocument(item = {}) {
             label: 'Imagem desktop',
             url: desktop,
             alt: imageAlt,
-            readOnly: true,
+            uploadable: true,
+            altEditable: false,
             help:
-              'A troca de arquivo será habilitada quando o Media Manager entrar no painel. Nesta etapa, a imagem atual é apenas visualizada.',
+              'JPG, PNG ou WebP, até 8 MB. Esta é a arte principal do banner.',
           },
           {
             kind: 'image',
@@ -3744,29 +3763,30 @@ function mapHomeSiteEditorDocument(item = {}) {
             label: 'Imagem mobile',
             url: mobile,
             alt: imageAlt,
-            readOnly: true,
+            uploadable: true,
+            altEditable: false,
             help:
-              'A troca de arquivo será habilitada quando o Media Manager entrar no painel. Nesta etapa, a imagem atual é apenas visualizada.',
+              'Opcional. Se ficar vazia, a versão desktop também será usada no mobile.',
           },
           {
             kind: 'text',
             id: 'hero.imageAlt',
             label: 'Texto alternativo das imagens',
             value: imageAlt,
-            required: true,
+            required: false,
             maxLength: 180,
             help:
-              'Descreva de forma objetiva o conteúdo visual para acessibilidade.',
+              'Obrigatório quando o banner estiver ativo. Descreva de forma objetiva o conteúdo visual.',
           },
           {
             kind: 'link',
             id: 'hero.cta',
-            label: 'Botão principal',
+            label: 'Botão / chamada',
             text: text(item.rotuloCta),
             href: text(item.linkCta),
-            required: true,
+            required: false,
             help:
-              'Use um caminho interno iniciado por / ou um endereço HTTPS completo.',
+              'Opcional. Se usar, informe texto e destino. Aceita caminho interno iniciado por / ou HTTPS.',
           },
         ],
       },
@@ -3796,35 +3816,49 @@ function validarSiteEditorHref(value) {
   }
 }
 
+function siteEditorSection(document = {}, sectionId = '') {
+  const sections = Array.isArray(document.sections) ? document.sections : [];
+  return sections.find((item) => text(item?.id) === sectionId) || null;
+}
+
 function validarDocumentoHomeSiteEditor(document = {}) {
+  const section = siteEditorSection(document, 'hero');
   const title = siteEditorField(document, 'hero.title');
   const body = siteEditorField(document, 'hero.body');
+  const desktopImage = siteEditorField(document, 'hero.desktopImage');
   const imageAlt = siteEditorField(document, 'hero.imageAlt');
   const cta = siteEditorField(document, 'hero.cta');
+  const active = section?.visible === true;
 
   if (!title || !text(title.value)) {
-    return 'Informe o título do destaque da Home.';
+    return 'Informe uma identificação para o banner da Home.';
   }
   if (text(title.value).length > 100) {
-    return 'O título da Home deve ter até 100 caracteres.';
+    return 'A identificação do banner deve ter até 100 caracteres.';
   }
-  if (!body || !text(body.value)) {
-    return 'Informe o texto de apoio do destaque da Home.';
-  }
-  if (text(body.value).length > 420) {
+  if (body && text(body.value).length > 420) {
     return 'O texto de apoio da Home deve ter até 420 caracteres.';
   }
-  if (!imageAlt || !text(imageAlt.value)) {
-    return 'Informe o texto alternativo das imagens da Home.';
-  }
-  if (text(imageAlt.value).length > 180) {
+  if (imageAlt && text(imageAlt.value).length > 180) {
     return 'O texto alternativo deve ter até 180 caracteres.';
   }
-  if (!cta || !text(cta.text) || !text(cta.href)) {
-    return 'Informe o texto e o destino do botão principal.';
+
+  if (active) {
+    if (!desktopImage || !text(desktopImage.url)) {
+      return 'Envie uma imagem desktop antes de ativar o banner.';
+    }
+    if (!imageAlt || !text(imageAlt.value)) {
+      return 'Informe o texto alternativo antes de ativar o banner.';
+    }
   }
-  if (!validarSiteEditorHref(cta.href)) {
-    return 'Use um caminho interno iniciado por / ou um endereço HTTPS no botão principal.';
+
+  const ctaText = text(cta?.text);
+  const ctaHref = text(cta?.href);
+  if ((ctaText && !ctaHref) || (!ctaText && ctaHref)) {
+    return 'Para usar a chamada, informe o texto e o destino do botão.';
+  }
+  if (ctaHref && !validarSiteEditorHref(ctaHref)) {
+    return 'Use um caminho interno iniciado por / ou um endereço HTTPS no botão.';
   }
 
   return '';
@@ -3854,45 +3888,469 @@ async function listarDestaquesHomeSiteEditor() {
   return (result.items || []).filter((item) => item && item._id);
 }
 
-export async function obterConteudoSiteAdminApi(tokenRecebido = '') {
+
+function siteEditorSafeFileName(value = '') {
+  const raw = text(value).normalize('NFKD').replace(/[\u0300-\u036f]/g, '');
+  const cleaned = raw
+    .replace(/[^a-zA-Z0-9._-]+/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 180);
+  return cleaned || `banner-${Date.now()}.jpg`;
+}
+
+async function validarLimiteBannersAtivos(excludeId = '') {
+  const items = await listarDestaquesHomeSiteEditor();
+  return items.filter(
+    (item) => item.ativo === true && text(item._id) !== text(excludeId)
+  ).length;
+}
+
+export async function prepararUploadImagemSiteAdminApi(payload = {}, tokenRecebido = '') {
   try {
     const tokenOk = await validarAdminToken(
       tokenRecebido,
-      ADMIN_PERMISSIONS.SITE_CONTEUDO_VER
+      ADMIN_PERMISSIONS.SITE_CONTEUDO_EDITAR
     );
-
     if (!tokenOk.ok) return tokenOk;
 
-    const items = await listarDestaquesHomeSiteEditor();
+    const mimeType = text(payload.mimeType).toLowerCase();
+    const fileName = siteEditorSafeFileName(payload.fileName);
+    const sizeInBytes = Number(payload.sizeInBytes) || 0;
 
-    if (!items.length) {
+    if (!SITE_EDITOR_IMAGE_MIME_TYPES.has(mimeType)) {
       return {
         ok: false,
-        codigo: 'CONTEUDO_NAO_ENCONTRADO',
-        mensagem: 'Nenhum destaque da Home foi encontrado na fonte editorial.',
+        codigo: 'ARQUIVO_INVALIDO',
+        mensagem: 'Envie uma imagem JPG, PNG ou WebP.',
+      };
+    }
+    if (!sizeInBytes || sizeInBytes > SITE_EDITOR_IMAGE_MAX_BYTES) {
+      return {
+        ok: false,
+        codigo: 'ARQUIVO_INVALIDO',
+        mensagem: 'A imagem deve ter até 8 MB.',
+      };
+    }
+
+    const upload = await mediaManager.getUploadUrl(
+      SITE_EDITOR_BANNER_FOLDER,
+      {
+        mediaOptions: {
+          mimeType,
+          mediaType: 'image',
+        },
+        metadataOptions: {
+          isPrivate: false,
+          isVisitorUpload: false,
+          context: {
+            origem: 'portal-gestao-oabjf',
+            fluxo: 'site-editor-banner-home',
+            nomeOriginal: text(payload.fileName),
+          },
+        },
+      }
+    );
+
+    if (!upload || !text(upload.uploadUrl)) {
+      return {
+        ok: false,
+        codigo: 'UPLOAD_INDISPONIVEL',
+        mensagem: 'Não foi possível preparar o envio da imagem agora.',
       };
     }
 
     return {
       ok: true,
-      workspace: {
-        pages: items.map(mapHomeSiteEditorDocument),
-        capabilities: {
-          remoteDraft: true,
-          publish: false,
-          mediaUpload: false,
-        },
-        discoveryNote:
-          'O editor está conectado à fonte editorial real da Home. Salvar atualiza o CMS institucional. A publicação do novo site permanece separada até automatizarmos o deploy.',
+      upload: {
+        uploadUrl: text(upload.uploadUrl),
+        fileName,
+        mimeType,
+        maxBytes: SITE_EDITOR_IMAGE_MAX_BYTES,
       },
     };
   } catch (err) {
-    console.error('Erro em obterConteudoSiteAdminApi:', err);
+    console.error('Erro em prepararUploadImagemSiteAdminApi:', err);
     return {
       ok: false,
       codigo: 'ERRO_INTERNO',
-      mensagem: 'Não foi possível carregar o conteúdo editorial do site.',
+      mensagem: 'Não foi possível preparar o envio da imagem.',
     };
+  }
+}
+
+export async function criarBannerHomeSiteAdminApi(payload = {}, tokenRecebido = '') {
+  try {
+    const tokenOk = await validarAdminToken(
+      tokenRecebido,
+      ADMIN_PERMISSIONS.SITE_CONTEUDO_EDITAR
+    );
+    if (!tokenOk.ok) return tokenOk;
+
+    const items = await listarDestaquesHomeSiteEditor();
+    if (items.length >= HOME_BANNERS_MAX_TOTAL) {
+      return {
+        ok: false,
+        codigo: 'LIMITE_BANNERS',
+        mensagem: `A Home pode manter no máximo ${HOME_BANNERS_MAX_TOTAL} banners cadastrados.`,
+      };
+    }
+
+    const lowestPriority = items.length
+      ? Math.min(...items.map((item) => Number(item.prioridade) || 0))
+      : 10;
+
+    const created = await wixData.insert(
+      COL.DESTAQUES_HOME,
+      {
+        titulo: 'Novo banner',
+        chamada: '',
+        imagemDesktop: '',
+        imagemMobile: '',
+        imagemAlt: '',
+        rotuloCta: '',
+        linkCta: '',
+        abrirNovaAba: false,
+        ativo: false,
+        prioridade: items.length ? lowestPriority - 10 : 10,
+      },
+      { suppressAuth: true }
+    );
+
+    await registrarAdminLog(
+      tokenOk,
+      'site.banner.criar',
+      'DestaquesHome',
+      created._id,
+      { pagina: '/', ativo: false }
+    );
+
+    return {
+      ok: true,
+      mensagem: 'Novo banner criado como inativo.',
+      pageId: siteEditorPageId(created),
+    };
+  } catch (err) {
+    console.error('Erro em criarBannerHomeSiteAdminApi:', err);
+    return {
+      ok: false,
+      codigo: 'ERRO_INTERNO',
+      mensagem: 'Não foi possível criar o banner da Home.',
+    };
+  }
+}
+
+export async function excluirBannerHomeSiteAdminApi(payload = {}, tokenRecebido = '') {
+  try {
+    const tokenOk = await validarAdminToken(
+      tokenRecebido,
+      ADMIN_PERMISSIONS.SITE_CONTEUDO_EDITAR
+    );
+    if (!tokenOk.ok) return tokenOk;
+
+    const pageId = text(payload.pageId);
+    const match = pageId.match(/^home:(.+)$/);
+    if (!match || !match[1]) {
+      return { ok: false, codigo: 'DADOS_INVALIDOS', mensagem: 'Banner inválido.' };
+    }
+
+    const items = await listarDestaquesHomeSiteEditor();
+    if (items.length <= 1) {
+      return {
+        ok: false,
+        codigo: 'ULTIMO_BANNER',
+        mensagem: 'Mantenha pelo menos um banner cadastrado na Home.',
+      };
+    }
+
+    const current = await obterDestaqueHomeSiteEditorPorId(match[1]);
+    if (!current || !current._id) {
+      return { ok: false, codigo: 'CONTEUDO_NAO_ENCONTRADO', mensagem: 'Banner não encontrado.' };
+    }
+    if (current.ativo === true) {
+      return {
+        ok: false,
+        codigo: 'BANNER_ATIVO',
+        mensagem: 'Desative e salve o banner antes de excluí-lo.',
+      };
+    }
+
+    const sourceRevision = text(payload.sourceRevision);
+    const currentRevision = siteEditorRevision(current);
+    if (sourceRevision && sourceRevision !== currentRevision) {
+      return {
+        ok: false,
+        codigo: 'CONFLITO_REVISAO',
+        mensagem: 'O banner foi alterado por outra sessão. Recarregue antes de excluir.',
+      };
+    }
+
+    await wixData.remove(COL.DESTAQUES_HOME, current._id, { suppressAuth: true });
+    await registrarAdminLog(
+      tokenOk,
+      'site.banner.excluir',
+      'DestaquesHome',
+      current._id,
+      { pagina: '/', titulo: text(current.titulo) }
+    );
+
+    return { ok: true, mensagem: 'Banner removido.' };
+  } catch (err) {
+    console.error('Erro em excluirBannerHomeSiteAdminApi:', err);
+    return { ok: false, codigo: 'ERRO_INTERNO', mensagem: 'Não foi possível excluir o banner.' };
+  }
+}
+
+export async function reordenarBannerHomeSiteAdminApi(payload = {}, tokenRecebido = '') {
+  try {
+    const tokenOk = await validarAdminToken(
+      tokenRecebido,
+      ADMIN_PERMISSIONS.SITE_CONTEUDO_EDITAR
+    );
+    if (!tokenOk.ok) return tokenOk;
+
+    const pageId = text(payload.pageId);
+    const direction = text(payload.direction).toLowerCase();
+    const match = pageId.match(/^home:(.+)$/);
+    if (!match || !match[1] || !['up', 'down'].includes(direction)) {
+      return { ok: false, codigo: 'DADOS_INVALIDOS', mensagem: 'Ordem de banner inválida.' };
+    }
+
+    const items = await listarDestaquesHomeSiteEditor();
+    const currentIndex = items.findIndex((item) => text(item._id) === match[1]);
+    const targetIndex = direction === 'up' ? currentIndex - 1 : currentIndex + 1;
+
+    if (currentIndex < 0) {
+      return { ok: false, codigo: 'CONTEUDO_NAO_ENCONTRADO', mensagem: 'Banner não encontrado.' };
+    }
+    if (targetIndex < 0 || targetIndex >= items.length) {
+      return { ok: true, mensagem: 'O banner já está no limite desta ordem.' };
+    }
+
+    const ordered = [...items];
+    [ordered[currentIndex], ordered[targetIndex]] = [
+      ordered[targetIndex],
+      ordered[currentIndex],
+    ];
+
+    for (let index = 0; index < ordered.length; index += 1) {
+      const item = ordered[index];
+      const nextPriority = (ordered.length - index) * 10;
+      if ((Number(item.prioridade) || 0) === nextPriority) continue;
+      await wixData.update(
+        COL.DESTAQUES_HOME,
+        { ...item, prioridade: nextPriority },
+        { suppressAuth: true }
+      );
+    }
+
+    await registrarAdminLog(
+      tokenOk,
+      'site.banner.reordenar',
+      'DestaquesHome',
+      match[1],
+      { pagina: '/', direcao: direction }
+    );
+
+    return { ok: true, mensagem: 'Ordem dos banners atualizada.' };
+  } catch (err) {
+    console.error('Erro em reordenarBannerHomeSiteAdminApi:', err);
+    return { ok: false, codigo: 'ERRO_INTERNO', mensagem: 'Não foi possível reordenar os banners.' };
+  }
+}
+
+const SITE_EDITOR_INSTITUTIONAL_PATHS = {
+  'sobre-a-oab': '/institucional/sobre-a-oab',
+  'conselho-federal': '/institucional/conselho-federal',
+  'oab-minas-gerais': '/institucional/oab-minas-gerais',
+  esa: '/institucional/esa',
+  ted: '/institucional/ted',
+  'caa-mg-em-jf': '/caa-mg-em-jf',
+  diretoria: '/prerrogativas/diretoria',
+  procuradoria: '/prerrogativas/procuradoria',
+};
+
+function siteEditorInstitutionalPath(item = {}) {
+  const slug = text(item.slug);
+  const fixed = SITE_EDITOR_INSTITUTIONAL_PATHS[slug];
+  if (fixed) return fixed;
+  return text(item.secao).toLowerCase() === 'prerrogativas'
+    ? `/prerrogativas/${slug}`
+    : `/institucional/${slug}`;
+}
+
+function siteEditorTextField(id, label, value, options = {}) {
+  return {
+    kind: options.multiline ? 'textarea' : 'text',
+    id, label, value: text(value),
+    ...(options.required ? { required: true } : {}),
+    ...(options.maxLength ? { maxLength: options.maxLength } : {}),
+    ...(options.help ? { help: options.help } : {}),
+  };
+}
+
+function siteEditorRichField(id, label, html, options = {}) {
+  return {
+    kind: 'richtext', id, label, html: text(html),
+    ...(options.required ? { required: true } : {}),
+    ...(options.maxLength ? { maxLength: options.maxLength } : {}),
+    ...(options.help ? { help: options.help } : {}),
+  };
+}
+
+function siteEditorOptionalTextFields(item = {}) {
+  const fields = [];
+  const add = (id, label, key, maxLength = 140) => {
+    if (text(item[key])) fields.push(siteEditorTextField(id, label, item[key], { maxLength }));
+  };
+  add('contact.primaryPhone', 'Telefone principal', 'telefonePrimario', 40);
+  add('contact.secondaryPhone', 'Telefone secundário', 'telefoneSecundario', 40);
+  add('contact.whatsapp', 'WhatsApp', 'whatsapp', 40);
+  add('contact.serviceType', 'Tipo de atendimento', 'tipoAtendimento', 80);
+  return fields;
+}
+
+function mapInstitutionalSiteEditorDocument(item = {}) {
+  const path = siteEditorInstitutionalPath(item);
+  const image = siteEditorImageUrl(item.imagem);
+  const imageAlt = text(item.imagemAlt) || text(item.titulo);
+  const sections = [
+    {
+      id: 'main', label: 'Apresentação',
+      description: 'Título, chamada, navegação e imagem principal da página.',
+      visible: true, visibilityEditable: false,
+      fields: [
+        siteEditorTextField('main.title', 'Título', item.titulo, { required: true, maxLength: 140 }),
+        siteEditorTextField('main.summary', 'Chamada', item.chamada, { required: true, maxLength: 500, multiline: true }),
+        siteEditorTextField('main.navigationLabel', 'Rótulo da navegação', item.rotuloNavegacao, { required: true, maxLength: 100 }),
+        ...(image ? [
+          { kind: 'image', id: 'main.image', label: 'Imagem principal', url: image, alt: imageAlt, readOnly: true },
+          siteEditorTextField('main.imageAlt', 'Texto alternativo da imagem', imageAlt, { required: true, maxLength: 180 }),
+        ] : []),
+      ],
+    },
+    {
+      id: 'content', label: 'Conteúdo',
+      description: 'Corpo editorial principal exibido na página pública.',
+      visible: true, visibilityEditable: false,
+      fields: [siteEditorRichField('content.body', 'Conteúdo da página', item.conteudo, { required: true, maxLength: 30000 })],
+    },
+  ];
+
+  const contactFields = siteEditorOptionalTextFields(item);
+  if (text(item.horario)) contactFields.push(siteEditorRichField('contact.hours', 'Horários', item.horario, { maxLength: 3000 }));
+  if (contactFields.length) sections.push({ id: 'contact', label: 'Atendimento e contato', description: 'Canais e horários exibidos para orientar o público.', visible: true, visibilityEditable: false, fields: contactFields });
+
+  const leadership = [];
+  const add = (id, label, key, maxLength = 140) => { if (text(item[key])) leadership.push(siteEditorTextField(id, label, item[key], { maxLength })); };
+  add('leadership.primaryName', 'Nome do responsável', 'responsavelNome');
+  add('leadership.primaryRole', 'Cargo do responsável', 'responsavelCargo');
+  add('leadership.primaryOab', 'OAB do responsável', 'responsavelOab', 60);
+  const leaderImage = siteEditorImageUrl(item.responsavelFoto);
+  if (leaderImage) {
+    leadership.push({ kind: 'image', id: 'leadership.primaryImage', label: 'Foto do responsável', url: leaderImage, alt: text(item.responsavelFotoAlt) || text(item.responsavelNome), readOnly: true });
+    leadership.push(siteEditorTextField('leadership.primaryImageAlt', 'Texto alternativo da foto', item.responsavelFotoAlt || item.responsavelNome, { maxLength: 180 }));
+  }
+  add('leadership.secondaryName', 'Nome do segundo responsável', 'responsavelSecundarioNome');
+  add('leadership.secondaryRole', 'Cargo do segundo responsável', 'responsavelSecundarioCargo');
+  add('leadership.secondaryOab', 'OAB do segundo responsável', 'responsavelSecundarioOab', 60);
+  const secondImage = siteEditorImageUrl(item.responsavelSecundarioFoto);
+  if (secondImage) {
+    leadership.push({ kind: 'image', id: 'leadership.secondaryImage', label: 'Foto do segundo responsável', url: secondImage, alt: text(item.responsavelSecundarioFotoAlt) || text(item.responsavelSecundarioNome), readOnly: true });
+    leadership.push(siteEditorTextField('leadership.secondaryImageAlt', 'Texto alternativo da segunda foto', item.responsavelSecundarioFotoAlt || item.responsavelSecundarioNome, { maxLength: 180 }));
+  }
+  if (leadership.length) sections.push({ id: 'leadership', label: 'Responsáveis', description: 'Responsáveis institucionais apresentados nesta página.', visible: true, visibilityEditable: false, fields: leadership });
+
+  const teamFields = [];
+  if (text(item.equipeTitulo)) teamFields.push(siteEditorTextField('team.title', 'Título da equipe', item.equipeTitulo, { maxLength: 140 }));
+  if (text(item.equipe)) teamFields.push(siteEditorRichField('team.body', 'Equipe', item.equipe, { maxLength: 20000 }));
+  if (teamFields.length) sections.push({ id: 'team', label: 'Equipe', description: 'Título e conteúdo da equipe vinculada à página.', visible: true, visibilityEditable: false, fields: teamFields });
+
+  sections.push({ id: 'seo', label: 'SEO', description: 'Metadados usados por buscadores e compartilhamentos.', visible: false, visibilityEditable: false, fields: [
+    siteEditorTextField('seo.title', 'Título SEO', item.seoTitulo, { maxLength: 70 }),
+    siteEditorTextField('seo.description', 'Descrição SEO', item.seoDescricao, { maxLength: 180, multiline: true }),
+  ] });
+
+  const sectionLabel = text(item.secao).toLowerCase() === 'prerrogativas' ? 'Prerrogativas' : 'Institucional';
+  return {
+    id: `institutional:${text(item._id)}`,
+    label: `${sectionLabel} - ${text(item.rotuloNavegacao || item.titulo)}`,
+    path, sourceUrl: `${SITE_EDITOR_PUBLIC_URL.replace(/\/$/, '')}${path}`,
+    sourceRevision: siteEditorRevision(item), sections,
+  };
+}
+
+async function listarPaginasInstitucionaisSiteEditor() {
+  const result = await wixData.query(COL.PAGINAS_INSTITUCIONAIS).ascending('ordem').ascending('titulo').limit(100).find({ suppressAuth: true });
+  return (result.items || []).filter((item) => item && item._id);
+}
+
+async function obterPaginaInstitucionalSiteEditorPorId(itemId = '') {
+  const id = text(itemId);
+  if (!id) return null;
+  try { return await wixData.get(COL.PAGINAS_INSTITUCIONAIS, id, { suppressAuth: true }); } catch (_) { return null; }
+}
+
+function siteEditorRichFieldHtml(document = {}, fieldId = '') {
+  const field = siteEditorField(document, fieldId);
+  return field && field.kind === 'richtext' ? text(field.html) : '';
+}
+function siteEditorTextFieldValue(document = {}, fieldId = '') {
+  const field = siteEditorField(document, fieldId);
+  return field && (field.kind === 'text' || field.kind === 'textarea') ? text(field.value) : '';
+}
+function siteEditorPlainRichText(value = '') { return text(value).replace(/<br\s*\/?\s*>/gi, ' ').replace(/<[^>]+>/g, ' ').replace(/&nbsp;/gi, ' ').replace(/&amp;/gi, '&').replace(/\s+/g, ' ').trim(); }
+
+function validarDocumentoInstitucionalSiteEditor(document = {}) {
+  const title = siteEditorTextFieldValue(document, 'main.title');
+  const summary = siteEditorTextFieldValue(document, 'main.summary');
+  const navigationLabel = siteEditorTextFieldValue(document, 'main.navigationLabel');
+  const body = siteEditorRichFieldHtml(document, 'content.body');
+  if (!title) return 'Informe o título da página institucional.';
+  if (title.length > 140) return 'O título deve ter até 140 caracteres.';
+  if (!summary) return 'Informe a chamada da página institucional.';
+  if (summary.length > 500) return 'A chamada deve ter até 500 caracteres.';
+  if (!navigationLabel) return 'Informe o rótulo da navegação.';
+  if (!siteEditorPlainRichText(body)) return 'Informe o conteúdo principal da página.';
+  if (siteEditorTextFieldValue(document, 'seo.title').length > 70) return 'O título SEO deve ter até 70 caracteres.';
+  if (siteEditorTextFieldValue(document, 'seo.description').length > 180) return 'A descrição SEO deve ter até 180 caracteres.';
+  return '';
+}
+
+function aplicarTexto(document, next, key, fieldId) { const field = siteEditorField(document, fieldId); if (field && (field.kind === 'text' || field.kind === 'textarea')) next[key] = text(field.value); }
+function aplicarRich(document, next, key, fieldId) { const field = siteEditorField(document, fieldId); if (field && field.kind === 'richtext') next[key] = text(field.html); }
+
+async function salvarPaginaInstitucionalSiteEditor(payload = {}, document = {}, itemId = '', tokenOk = {}) {
+  const current = await obterPaginaInstitucionalSiteEditorPorId(itemId);
+  if (!current || !current._id) return { ok: false, codigo: 'CONTEUDO_NAO_ENCONTRADO', mensagem: 'A página institucional não foi encontrada.' };
+  const currentRevision = siteEditorRevision(current);
+  const sourceRevision = text(payload.sourceRevision || document.sourceRevision);
+  if (sourceRevision && sourceRevision !== currentRevision) return { ok: false, codigo: 'CONFLITO_REVISAO', mensagem: 'O conteúdo foi alterado por outra sessão. Recarregue o editor antes de salvar novamente.', sourceRevision: currentRevision };
+  const validationError = validarDocumentoInstitucionalSiteEditor(document);
+  if (validationError) return { ok: false, codigo: 'DADOS_INVALIDOS', mensagem: validationError };
+  const updated = { ...current };
+  aplicarTexto(document, updated, 'titulo', 'main.title'); aplicarTexto(document, updated, 'chamada', 'main.summary'); aplicarTexto(document, updated, 'rotuloNavegacao', 'main.navigationLabel'); aplicarTexto(document, updated, 'imagemAlt', 'main.imageAlt'); aplicarRich(document, updated, 'conteudo', 'content.body');
+  aplicarTexto(document, updated, 'telefonePrimario', 'contact.primaryPhone'); aplicarTexto(document, updated, 'telefoneSecundario', 'contact.secondaryPhone'); aplicarTexto(document, updated, 'whatsapp', 'contact.whatsapp'); aplicarTexto(document, updated, 'tipoAtendimento', 'contact.serviceType'); aplicarRich(document, updated, 'horario', 'contact.hours');
+  aplicarTexto(document, updated, 'responsavelNome', 'leadership.primaryName'); aplicarTexto(document, updated, 'responsavelCargo', 'leadership.primaryRole'); aplicarTexto(document, updated, 'responsavelOab', 'leadership.primaryOab'); aplicarTexto(document, updated, 'responsavelFotoAlt', 'leadership.primaryImageAlt');
+  aplicarTexto(document, updated, 'responsavelSecundarioNome', 'leadership.secondaryName'); aplicarTexto(document, updated, 'responsavelSecundarioCargo', 'leadership.secondaryRole'); aplicarTexto(document, updated, 'responsavelSecundarioOab', 'leadership.secondaryOab'); aplicarTexto(document, updated, 'responsavelSecundarioFotoAlt', 'leadership.secondaryImageAlt');
+  aplicarTexto(document, updated, 'equipeTitulo', 'team.title'); aplicarRich(document, updated, 'equipe', 'team.body'); aplicarTexto(document, updated, 'seoTitulo', 'seo.title'); aplicarTexto(document, updated, 'seoDescricao', 'seo.description');
+  const saved = await wixData.update(COL.PAGINAS_INSTITUCIONAIS, updated, { suppressAuth: true });
+  await registrarAdminLog(tokenOk, 'site.conteudo.salvar', 'PaginasInstitucionais', saved._id, { pagina: siteEditorInstitutionalPath(saved), titulo: text(saved.titulo), revisaoAnterior: currentRevision, revisaoAtual: siteEditorRevision(saved) });
+  return { ok: true, mensagem: 'Página institucional salva na fonte editorial.', page: mapInstitutionalSiteEditorDocument(saved) };
+}
+
+export async function obterConteudoSiteAdminApi(tokenRecebido = '') {
+  try {
+    const tokenOk = await validarAdminToken(tokenRecebido, ADMIN_PERMISSIONS.SITE_CONTEUDO_VER);
+    if (!tokenOk.ok) return tokenOk;
+    const [homeItems, institutionalItems] = await Promise.all([listarDestaquesHomeSiteEditor(), listarPaginasInstitucionaisSiteEditor()]);
+    const homePages = homeItems.map((item, index) => mapHomeSiteEditorDocument(item, index, homeItems.length));
+    const pages = [...homePages, ...institutionalItems.map(mapInstitutionalSiteEditorDocument)];
+    if (!pages.length) return { ok: false, codigo: 'CONTEUDO_NAO_ENCONTRADO', mensagem: 'Nenhum conteúdo editorial foi encontrado.' };
+    return { ok: true, workspace: { pages, capabilities: { remoteDraft: true, publish: false, mediaUpload: true, homeBannerManagement: true, maxActiveHomeBanners: HOME_BANNERS_MAX_ACTIVE }, discoveryNote: 'O editor está conectado à Home e às páginas institucionais reais. A Home aceita até 5 banners ativos, com imagens enviadas ao Media Manager. Salvar atualiza o CMS; o deploy do novo site permanece separado.' } };
+  } catch (err) {
+    console.error('Erro em obterConteudoSiteAdminApi:', err);
+    return { ok: false, codigo: 'ERRO_INTERNO', mensagem: 'Não foi possível carregar o conteúdo editorial do site.' };
   }
 }
 
@@ -3910,6 +4368,10 @@ export async function salvarConteudoSiteAdminApi(
 
     const document = payload.document || {};
     const pageId = text(payload.pageId || document.id);
+    const institutionalMatch = pageId.match(/^institutional:(.+)$/);
+    if (institutionalMatch && institutionalMatch[1]) {
+      return salvarPaginaInstitucionalSiteEditor(payload, document, institutionalMatch[1], tokenOk);
+    }
     const match = pageId.match(/^home:(.+)$/);
 
     if (!match || !match[1]) {
@@ -3955,18 +4417,36 @@ export async function salvarConteudoSiteAdminApi(
       };
     }
 
+    const section = siteEditorSection(document, 'hero');
     const title = siteEditorField(document, 'hero.title');
     const body = siteEditorField(document, 'hero.body');
+    const desktopImage = siteEditorField(document, 'hero.desktopImage');
+    const mobileImage = siteEditorField(document, 'hero.mobileImage');
     const imageAlt = siteEditorField(document, 'hero.imageAlt');
     const cta = siteEditorField(document, 'hero.cta');
+    const nextActive = section?.visible === true;
+
+    if (nextActive && current.ativo !== true) {
+      const activeCount = await validarLimiteBannersAtivos(current._id);
+      if (activeCount >= HOME_BANNERS_MAX_ACTIVE) {
+        return {
+          ok: false,
+          codigo: 'LIMITE_BANNERS_ATIVOS',
+          mensagem: `A Home pode exibir no máximo ${HOME_BANNERS_MAX_ACTIVE} banners ativos ao mesmo tempo.`,
+        };
+      }
+    }
 
     const updated = {
       ...current,
       titulo: text(title.value),
-      chamada: text(body.value),
-      imagemAlt: text(imageAlt.value),
-      rotuloCta: text(cta.text),
-      linkCta: text(cta.href),
+      chamada: text(body?.value),
+      imagemDesktop: text(desktopImage?.url),
+      imagemMobile: text(mobileImage?.url),
+      imagemAlt: text(imageAlt?.value),
+      rotuloCta: text(cta?.text),
+      linkCta: text(cta?.href),
+      ativo: nextActive,
     };
 
     const saved = await wixData.update(COL.DESTAQUES_HOME, updated, {

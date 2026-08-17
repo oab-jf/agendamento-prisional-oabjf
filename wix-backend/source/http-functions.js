@@ -58,6 +58,10 @@ import {
   obterRelatorioFinanceiroEventoAdminApi,
   obterConteudoSiteAdminApi,
   salvarConteudoSiteAdminApi,
+  prepararUploadImagemSiteAdminApi,
+  criarBannerHomeSiteAdminApi,
+  excluirBannerHomeSiteAdminApi,
+  reordenarBannerHomeSiteAdminApi,
 } from 'backend/adminApi';
 
 import {
@@ -5876,7 +5880,7 @@ function eventoHomeValido(item) {
   );
 }
 
-async function carregarDestaqueHome() {
+async function carregarDestaquesHome() {
   const now = new Date();
   const result = await wixData
     .query(COL.DESTAQUES_HOME)
@@ -5886,7 +5890,7 @@ async function carregarDestaqueHome() {
     .limit(50)
     .find({ suppressAuth: true });
 
-  const candidates = (result.items || [])
+  return (result.items || [])
     .filter((item) => {
       const start = normalizarDataHome(item.inicio);
       const end = normalizarDataHome(item.fim);
@@ -5897,15 +5901,10 @@ async function carregarDestaqueHome() {
     .filter(destaqueHomeValido)
     .sort((a, b) => {
       const priorityCompare = b.priority - a.priority;
-
-      if (priorityCompare !== 0) {
-        return priorityCompare;
-      }
-
+      if (priorityCompare !== 0) return priorityCompare;
       return a.title.localeCompare(b.title, 'pt-BR');
-    });
-
-  return candidates[0] || null;
+    })
+    .slice(0, 5);
 }
 
 async function carregarNoticiasHome() {
@@ -7439,11 +7438,12 @@ export async function use_oabHome(request) {
       });
     }
 
-    const [banner, news, events] = await Promise.all([
-      carregarDestaqueHome(),
+    const [banners, news, events] = await Promise.all([
+      carregarDestaquesHome(),
       carregarNoticiasHome(),
       carregarEventosHome(),
     ]);
+    const banner = banners[0] || null;
 
     return ok({
       headers: {
@@ -7455,6 +7455,7 @@ export async function use_oabHome(request) {
         version: 1,
         generatedAt: new Date().toISOString(),
         banner,
+        banners,
         news,
         events,
       },
@@ -10745,7 +10746,13 @@ function adminSiteConteudoErroResponse(request, resultado) {
     resultado.codigo === 'DADOS_INVALIDOS' ||
     resultado.codigo === 'CONFLITO_REVISAO' ||
     resultado.codigo === 'CONTEUDO_NAO_ENCONTRADO' ||
-    resultado.codigo === 'PAGINA_NAO_SUPORTADA'
+    resultado.codigo === 'PAGINA_NAO_SUPORTADA' ||
+    resultado.codigo === 'ARQUIVO_INVALIDO' ||
+    resultado.codigo === 'UPLOAD_INDISPONIVEL' ||
+    resultado.codigo === 'LIMITE_BANNERS' ||
+    resultado.codigo === 'LIMITE_BANNERS_ATIVOS' ||
+    resultado.codigo === 'BANNER_ATIVO' ||
+    resultado.codigo === 'ULTIMO_BANNER'
   ) {
     return jsonBadRequest(request, resultado);
   }
@@ -10770,7 +10777,20 @@ export async function use_oabAdminSiteConteudo(request) {
 
     if (isPost(request)) {
       const payload = await readJsonBody(request);
-      const resultado = await salvarConteudoSiteAdminApi(payload, token);
+      const action = text(payload.action);
+      let resultado;
+
+      if (action === 'prepareImageUpload') {
+        resultado = await prepararUploadImagemSiteAdminApi(payload, token);
+      } else if (action === 'createHomeBanner') {
+        resultado = await criarBannerHomeSiteAdminApi(payload, token);
+      } else if (action === 'deleteHomeBanner') {
+        resultado = await excluirBannerHomeSiteAdminApi(payload, token);
+      } else if (action === 'reorderHomeBanner') {
+        resultado = await reordenarBannerHomeSiteAdminApi(payload, token);
+      } else {
+        resultado = await salvarConteudoSiteAdminApi(payload, token);
+      }
 
       if (resultado.ok) return jsonOk(request, resultado);
       return adminSiteConteudoErroResponse(request, resultado);
