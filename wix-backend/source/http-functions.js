@@ -10071,19 +10071,25 @@ async function reconciliarPublicacaoPendenteAdmin(collectionId, kind, item) {
 }
 
 async function carregarPublicacoesPendentesAdmin() {
+  const draftReadOptions = {
+    suppressAuth: true,
+    showDrafts: true,
+    consistentRead: true,
+  };
+
   const [correspondentesRaw, oportunidadesRaw] = await Promise.all([
     wixData
       .query(COL.CORRESPONDENTES)
       .eq('_publishStatus', 'DRAFT')
       .descending('_createdDate')
       .limit(PUBLICACOES_PENDENTES_MAX_RESULTS)
-      .find({ suppressAuth: true }),
+      .find(draftReadOptions),
     wixData
       .query(COL.OPORTUNIDADES)
       .eq('_publishStatus', 'DRAFT')
       .descending('_createdDate')
       .limit(PUBLICACOES_PENDENTES_MAX_RESULTS)
-      .find({ suppressAuth: true }),
+      .find(draftReadOptions),
   ]);
 
   const correspondentesReconciliados = await Promise.all(
@@ -10150,7 +10156,13 @@ function resolverPublicacaoPendente(kind, id) {
 
 async function obterPublicacaoPendenteAdmin(target) {
   if (!target) return null;
-  const item = await wixData.get(target.collectionId, target.id, { suppressAuth: true });
+
+  const item = await wixData.get(target.collectionId, target.id, {
+    suppressAuth: true,
+    showDrafts: true,
+    consistentRead: true,
+  });
+
   if (!item || text(item._publishStatus).toUpperCase() !== 'DRAFT') return null;
   return item;
 }
@@ -10170,7 +10182,10 @@ async function salvarEstadoPortalPublicacao(target, item, patch) {
       ...item,
       ...patch,
     },
-    { suppressAuth: true }
+    {
+      suppressAuth: true,
+      showDrafts: true,
+    }
   );
 }
 
