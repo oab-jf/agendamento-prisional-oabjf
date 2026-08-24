@@ -9,7 +9,12 @@ export type AppHeaderProps = {
   rightSlot?: ReactNode;
 };
 
-const SITE_URL = "https://www.juizdefora-oabmg.org.br";
+const PRODUCTION_SITE_URL = "https://www.juizdefora-oabmg.org.br";
+
+const SITE_URL = (
+  import.meta.env.VITE_SITE_URL ||
+  (import.meta.env.DEV ? "http://localhost:4321" : PRODUCTION_SITE_URL)
+).replace(/\/+$/, "");
 
 const navigation = [
   { label: "Institucional", href: `${SITE_URL}/caa-mg-em-jf` },
