@@ -175,7 +175,7 @@ export async function loginAdminApi(payload = {}) {
         return {
           ok: true,
           precisaVerificarEmail: true,
-          mensagem: 'Enviamos um código de validação para o e-mail cadastrado.',
+          mensagem: 'Código de validação solicitado. Verifique o e-mail cadastrado.',
           email,
           admin: mapAdminUsuarioSeguro(envio.usuario || usuario),
         };
@@ -1274,7 +1274,7 @@ export async function reenviarCodigoEmailAdminApi(payload = {}) {
 
     return {
       ok: true,
-      mensagem: 'Enviamos um novo código para o e-mail cadastrado.',
+      mensagem: 'Novo código solicitado. Verifique o e-mail cadastrado.',
       email,
     };
   } catch (err) {
@@ -4818,13 +4818,13 @@ async function hashConviteAdmin(conviteToken) {
 async function montarUrlConviteAdmin(conviteToken) {
   let baseUrl = '';
   try {
-    baseUrl = text(await getSecret('OAB_CENTRAL_URL'));
+    baseUrl = text(await getSecret('OAB_PORTAL_URL'));
   } catch (err) {
     baseUrl = '';
   }
-  if (!baseUrl) baseUrl = 'https://central.juizdefora-oabmg.org.br';
+  if (!baseUrl) baseUrl = 'https://portal-oabjf.pages.dev';
   baseUrl = baseUrl.replace(/\/+$/, '');
-  return `${baseUrl}/admin/convite?token=${encodeURIComponent(text(conviteToken))}`;
+  return `${baseUrl}/convite?token=${encodeURIComponent(text(conviteToken))}`;
 }
 
 async function enviarConviteEmailAdmin({ usuario, conviteUrl, expiraEm, origem = 'criar' }) {
@@ -4833,12 +4833,12 @@ async function enviarConviteEmailAdmin({ usuario, conviteUrl, expiraEm, origem =
     const email = normalizeEmail(usuario.email);
     const expira = parseDateTime(expiraEm);
     const expiraLabel = expira ? formatDateTimePtBr(expira) : 'em breve';
-    const subject = 'Convite de acesso — Central OAB Juiz de Fora';
-    const textBody = `Olá.\n\nVocê recebeu um convite para acessar o painel administrativo da Central de Agendamento Prisional da OAB Juiz de Fora.\n\nConclua seu cadastro pelo link abaixo:\n${conviteUrl}\n\nO convite expira em ${expiraLabel}.\n\nSe você não esperava este convite, ignore esta mensagem.`;
+    const subject = 'Convite de acesso — Portal de Gestão OAB Juiz de Fora';
+    const textBody = `Olá.\n\nVocê recebeu um convite para acessar o Portal de Gestão da OAB Juiz de Fora.\n\nConclua seu cadastro pelo link abaixo:\n${conviteUrl}\n\nO convite expira em ${expiraLabel}.\n\nSe você não esperava este convite, ignore esta mensagem.`;
     const htmlBody = `
       <div style="font-family:Arial,sans-serif;color:#2f2a24;line-height:1.5">
         <p>Olá.</p>
-        <p>Você recebeu um convite para acessar o painel administrativo da <strong>Central de Agendamento Prisional da OAB Juiz de Fora</strong>.</p>
+        <p>Você recebeu um convite para acessar o <strong>Portal de Gestão da OAB Juiz de Fora</strong>.</p>
         <p style="margin:18px 0">
           <a href="${escapeHtml(conviteUrl)}" style="display:inline-block;background:#2f2a24;color:#fff;text-decoration:none;padding:12px 18px;border-radius:6px;font-weight:700">Concluir cadastro</a>
         </p>
@@ -5042,12 +5042,12 @@ async function enviarCodigoEmailAdmin({ usuario, codigo, expiraEm }) {
     const nome = text(usuario.nome || 'Usuário');
     const email = normalizeEmail(usuario.email);
     const minutos = Math.max(1, Math.round((expiraEm.getTime() - Date.now()) / 60000));
-    const subject = 'Código de validação — Central OAB Juiz de Fora';
-    const textBody = `Olá, ${nome}.\n\nSeu código de validação para acesso à Central de Agendamento Prisional é: ${codigo}\n\nEle expira em aproximadamente ${minutos} minutos.\n\nSe você não solicitou este acesso, ignore esta mensagem.`;
+    const subject = 'Código de validação — Portal de Gestão OAB Juiz de Fora';
+    const textBody = `Olá, ${nome}.\n\nSeu código de validação para acesso ao Portal de Gestão da OAB Juiz de Fora é: ${codigo}\n\nEle expira em aproximadamente ${minutos} minutos.\n\nSe você não solicitou este acesso, ignore esta mensagem.`;
     const htmlBody = `
       <div style="font-family:Arial,sans-serif;color:#2f2a24;line-height:1.5">
         <p>Olá, ${escapeHtml(nome)}.</p>
-        <p>Seu código de validação para acesso à <strong>Central de Agendamento Prisional da OAB Juiz de Fora</strong> é:</p>
+        <p>Seu código de validação para acesso ao <strong>Portal de Gestão da OAB Juiz de Fora</strong> é:</p>
         <p style="font-size:24px;letter-spacing:4px;font-weight:700;margin:16px 0;color:#1f2937">${codigo}</p>
         <p>Ele expira em aproximadamente ${minutos} minutos.</p>
         <p style="font-size:12px;color:#6b6257">Se você não solicitou este acesso, ignore esta mensagem.</p>
@@ -5175,6 +5175,13 @@ async function enviarEmailInfobipAdmin({ config, to, subject, textBody, htmlBody
     const raw = await response.text();
 
     if (!response.ok) {
+      console.error('Infobip recusou e-mail administrativo.', {
+        statusCode: response.status,
+        to: mascararEmailAdmin(to),
+        subject,
+        response: text(raw).slice(0, 700),
+      });
+
       return {
         ok: false,
         statusCode: response.status,
@@ -5182,10 +5189,52 @@ async function enviarEmailInfobipAdmin({ config, to, subject, textBody, htmlBody
       };
     }
 
-    return { ok: true, statusCode: response.status };
+    let provider = null;
+
+    try {
+      provider = raw ? JSON.parse(raw) : null;
+    } catch (_) {
+      provider = null;
+    }
+
+    const firstMessage = Array.isArray(provider?.messages)
+      ? provider.messages[0]
+      : null;
+
+    const bulkId = text(provider?.bulkId);
+    const messageId = text(firstMessage?.messageId);
+
+    console.info('Infobip aceitou solicitação de e-mail administrativo.', {
+      statusCode: response.status,
+      bulkId,
+      messageId,
+      to: mascararEmailAdmin(to),
+      subject,
+    });
+
+    return {
+      ok: true,
+      statusCode: response.status,
+      bulkId,
+      messageId,
+    };
   } catch (err) {
     return { ok: false, mensagem: normalizarMensagemErroApi(err) };
   }
+}
+
+
+function mascararEmailAdmin(value) {
+  const email = normalizeEmail(value);
+  const parts = email.split('@');
+
+  if (parts.length !== 2) return '';
+
+  const local = parts[0] || '';
+  const domain = parts[1] || '';
+  const prefix = local.slice(0, Math.min(2, local.length));
+
+  return `${prefix}***@${domain}`;
 }
 
 
