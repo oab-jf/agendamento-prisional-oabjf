@@ -9,7 +9,7 @@
  * restante do app continue usando `code` / `message` / `error`.
  */
 
-const API_BASE = "https://www.juizdefora-oabmg.org.br/_functions";
+const API_BASE = "https://emktoab.wixstudio.com/oabmg/_functions";
 
 const CACHE_CATALOGO_MS = 2 * 60 * 1000;
 
